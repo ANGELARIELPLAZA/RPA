@@ -480,11 +480,11 @@ async function fillAndVerify(page, selector, value, options = {}) {
     const {
         timeout = 15000,
         retries = 3,
-        settleMs = 300,
+        settleMs = 500,
         fieldName = selector,
     } = options;
 
-    const expectedValue = String(value);
+    const expectedValue = String(value).trim();
     let lastError;
 
     for (let attempt = 1; attempt <= retries; attempt++) {
@@ -495,27 +495,52 @@ async function fillAndVerify(page, selector, value, options = {}) {
             });
 
             const locator = page.locator(selector);
+            const isDateField =
+                fieldName.toLowerCase().includes("birthdate") ||
+                selector.toLowerCase().includes("birthdate") ||
+                selector.toLowerCase().includes("fecha");
 
-            await locator.fill("");
-            await locator.fill(expectedValue);
+            await locator.click({ timeout });
+
+            // limpiar
+            await locator.press("Control+A").catch(() => {});
+            await locator.press("Meta+A").catch(() => {});
+            await locator.press("Delete").catch(() => {});
+            await locator.fill("").catch(() => {});
+
+            if (isDateField) {
+                // escritura real para máscaras
+                await locator.pressSequentially(expectedValue, { delay: 120 });
+            } else {
+                await locator.fill(expectedValue);
+            }
+
+            await locator.dispatchEvent("input").catch(() => {});
+            await locator.dispatchEvent("change").catch(() => {});
             await locator.blur();
 
             await page.waitForTimeout(settleMs);
 
-            const currentValue = await locator.inputValue();
+            const currentValue = (await locator.inputValue()).trim();
 
-            if (String(currentValue).trim() !== expectedValue) {
-                throw new Error(`Esperado=${expectedValue}, actual=${currentValue}`);
+            if (currentValue !== expectedValue) {
+                throw new Error(
+                    `Esperado=${expectedValue}, actual=${currentValue}`
+                );
             }
 
             console.log(`[OK] ${fieldName}=${expectedValue}`);
             return;
+
         } catch (error) {
             lastError = error;
-            console.log(`[WARN] ${fieldName} intento ${attempt}/${retries}: ${error.message}`);
+
+            console.log(
+                `[WARN] ${fieldName} intento ${attempt}/${retries}: ${error.message}`
+            );
 
             if (attempt < retries) {
-                await page.waitForTimeout(500);
+                await page.waitForTimeout(700);
             }
         }
     }
@@ -532,7 +557,26 @@ async function datosDelCliente(page, data) {
         throw new Error("No viene el objeto cliente en el JSON");
     }
 
-    for (const field of CLIENTE_FIELDS) {
+    // =========================
+    // 1. Obtener customerType
+    // =========================
+    const customerTypeRaw = getNestedValue(cliente, "customerType");
+
+    const customerTypeEmpty =
+        customerTypeRaw === undefined ||
+        customerTypeRaw === null ||
+        String(customerTypeRaw).trim() === "";
+
+    if (customerTypeEmpty) {
+        throw new Error("Falta el campo requerido: customerType");
+    }
+
+    const customerType = String(customerTypeRaw).trim();
+
+    // =========================
+    // 2. Llenar campos base
+    // =========================
+    for (const field of CLIENTE_BASE_FIELDS) {
         const rawValue = getNestedValue(cliente, field.key);
 
         const isEmpty =
@@ -562,12 +606,68 @@ async function datosDelCliente(page, data) {
                 fieldName: field.key,
                 retries: field.retries ?? 3,
                 timeout: field.timeout ?? 15000,
-                settleMs: 300,
+                settleMs: 400,
             });
         } else {
             throw new Error(`Tipo de campo no soportado: ${field.type}`);
         }
     }
+
+    // =========================
+    // 3. Esperar render dinámico
+    // =========================
+    await page.waitForTimeout(800);
+
+    // =========================
+    // 4. Obtener campos por tipo
+    // =========================
+    const fieldsByType = CLIENTE_FIELDS_BY_TYPE[customerType];
+
+    if (!fieldsByType) {
+        throw new Error(`customerType no soportado: ${customerType}`);
+    }
+
+    // =========================
+    // 5. Llenar campos del tipo
+    // =========================
+    for (const field of fieldsByType) {
+        const rawValue = getNestedValue(cliente, field.key);
+
+        const isEmpty =
+            rawValue === undefined ||
+            rawValue === null ||
+            String(rawValue).trim() === "";
+
+        if (isEmpty) {
+            if (field.required) {
+                throw new Error(`Falta el campo requerido: ${field.key}`);
+            }
+            continue;
+        }
+
+        const value = field.transform ? field.transform(rawValue) : rawValue;
+        const selector = await resolveFieldSelector(page, field);
+
+        if (field.type === "select") {
+            await selectAndVerify(page, selector, value, {
+                fieldName: field.key,
+                retries: field.retries ?? 3,
+                timeout: field.timeout ?? 15000,
+                settleMs: 300,
+            });
+        } else if (field.type === "input") {
+            await fillAndVerify(page, selector, value, {
+                fieldName: field.key,
+                retries: field.retries ?? 3,
+                timeout: field.timeout ?? 15000,
+                settleMs: 400,
+            });
+        } else {
+            throw new Error(`Tipo de campo no soportado: ${field.type}`);
+        }
+    }
+
+    console.log(`[OK] Datos del cliente completados para tipo ${customerType}`);
 }
 
 async function ejecutarFlujo() {
