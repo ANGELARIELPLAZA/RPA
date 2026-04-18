@@ -8,6 +8,22 @@ function isEmptyValue(value) {
     return value === undefined || value === null || String(value).trim() === "";
 }
 
+function normalizeMoneyValue(value) {
+    return String(value ?? "")
+        .trim()
+        .replace(/[^0-9.-]/g, "");
+}
+
+function parseMoneyValue(value) {
+    const normalized = normalizeMoneyValue(value);
+    if (!normalized) {
+        return null;
+    }
+
+    const amount = Number(normalized);
+    return Number.isFinite(amount) ? amount : null;
+}
+
 async function resolveFieldSelector(page, field) {
     if (field.selector) {
         return field.selector;
@@ -113,6 +129,7 @@ async function fillAndVerify(page, selector, value, options = {}) {
     const settleMs = options.settleMs ?? 500;
     const fieldName = options.fieldName ?? selector;
     const expectedValue = String(value).trim();
+    const expectedMoneyValue = parseMoneyValue(expectedValue);
     let lastError;
 
     for (let attempt = 1; attempt <= retries; attempt += 1) {
@@ -140,7 +157,18 @@ async function fillAndVerify(page, selector, value, options = {}) {
             await page.waitForTimeout(settleMs);
 
             const currentValue = (await locator.inputValue()).trim();
-            if (currentValue !== expectedValue) {
+            const isMoneyField = [
+                "vehiclePriceTax",
+                "vehicleAccesoriesAmount",
+                "vehicleChargeStationAmount",
+            ].includes(fieldName);
+
+            if (isMoneyField) {
+                const currentMoneyValue = parseMoneyValue(currentValue);
+                if (currentMoneyValue !== expectedMoneyValue) {
+                    throw new Error(`Esperado=${expectedValue}, actual=${currentValue}`);
+                }
+            } else if (currentValue !== expectedValue) {
                 throw new Error(`Esperado=${expectedValue}, actual=${currentValue}`);
             }
 
@@ -226,11 +254,18 @@ async function setCheckboxValue(page, selector, value, options = {}) {
 
     for (let attempt = 1; attempt <= retries; attempt += 1) {
         try {
-            await page.waitForSelector(selector, { state: "visible", timeout });
             const locator = page.locator(selector).first();
+            await locator.waitFor({ state: "attached", timeout });
 
-            if (!(await locator.isEnabled())) {
-                throw new Error("El checkbox esta deshabilitado");
+            const isVisible = await locator.isVisible().catch(() => false);
+            const isEnabled = await locator.isEnabled().catch(() => false);
+
+            if (!isVisible || !isEnabled) {
+                if (!expectedChecked) {
+                    return;
+                }
+
+                throw new Error(`El checkbox no esta disponible. visible=${isVisible} enabled=${isEnabled}`);
             }
 
             const currentChecked = await locator.isChecked();
@@ -332,8 +367,14 @@ async function fillVehicleData(page, payload) {
 }
 
 async function readVehicleTotalAmount(page) {
-    const selector = "#vehicleTotalAmount";
+    return readMoneyField(page, "#vehicleTotalAmount");
+}
 
+async function readVehiclePriceTax(page) {
+    return readMoneyField(page, "#vehiclePriceTax");
+}
+
+async function readMoneyField(page, selector) {
     await page.waitForSelector(selector, { state: "attached", timeout: 15000 });
     await page.waitForFunction((currentSelector) => {
         const input = document.querySelector(currentSelector);
@@ -358,5 +399,6 @@ async function readVehicleTotalAmount(page) {
 module.exports = {
     fillClientData,
     fillVehicleData,
+    readVehiclePriceTax,
     readVehicleTotalAmount,
 };

@@ -97,6 +97,7 @@ function createApiServer() {
                     screenshotPath: job.result.screenshotPath,
                     consolePath: job.result.consolePath,
                     elapsedSeconds: job.result.elapsedSeconds,
+                    vehiclePriceTax: job.result.vehiclePriceTax || null,
                     vehicleTotalAmount: job.result.vehicleTotalAmount || null,
                 });
                 return;
