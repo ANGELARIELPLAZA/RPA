@@ -67,6 +67,7 @@ function serializeJob(job) {
                 consolePath: job.result.consolePath,
                 elapsedSeconds: job.result.elapsedSeconds,
                 screenshotPath: job.result.screenshotPath,
+                vehicleTotalAmount: job.result.vehicleTotalAmount || null,
                 videoPaths: job.result.videoPaths,
             }
             : null,

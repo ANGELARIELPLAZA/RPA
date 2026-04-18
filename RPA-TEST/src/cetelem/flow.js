@@ -37,6 +37,58 @@ function validateSession(pageOrPopup) {
   }
 }
 
+async function prepareFullQuoteScreenshot(popup) {
+  await popup.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
+
+  await popup.evaluate(() => {
+    const target =
+      document.querySelector("#vehicleTotalAmount") ||
+      document.querySelector("#vehicleVersion") ||
+      document.querySelector("#vehiclePriceTax");
+
+    if (target && typeof target.scrollIntoView === "function") {
+      target.scrollIntoView({ block: "center", inline: "nearest" });
+    }
+
+    const visited = new Set();
+    let current = target instanceof Element ? target.parentElement : document.body;
+
+    while (current) {
+      if (!visited.has(current)) {
+        visited.add(current);
+        const computed = window.getComputedStyle(current);
+        const overflowY = computed.overflowY;
+        const overflow = computed.overflow;
+        const isScrollable =
+          ["auto", "scroll"].includes(overflowY) ||
+          ["auto", "scroll"].includes(overflow) ||
+          current.scrollHeight > current.clientHeight + 20;
+
+        if (isScrollable) {
+          current.dataset.codexScreenshotOverflow = current.style.overflow || "";
+          current.dataset.codexScreenshotOverflowY = current.style.overflowY || "";
+          current.dataset.codexScreenshotHeight = current.style.height || "";
+          current.dataset.codexScreenshotMaxHeight = current.style.maxHeight || "";
+
+          current.style.overflow = "visible";
+          current.style.overflowY = "visible";
+          current.style.height = "auto";
+          current.style.maxHeight = "none";
+        }
+      }
+
+      current = current.parentElement;
+    }
+
+    document.documentElement.style.scrollBehavior = "auto";
+    document.body.style.overflow = "visible";
+    document.body.style.height = "auto";
+    document.body.style.maxHeight = "none";
+  });
+
+  await popup.waitForTimeout(1200);
+}
+
 async function waitForValidQuoteScreen(popup, timeout = 45000) {
   const start = Date.now();
   let reloads = 0;
@@ -216,6 +268,8 @@ async function runCetelemFlow(payload) {
     await fillVehicleData(popup, payload);
     const vehicleTotalAmount = await readVehicleTotalAmount(popup);
 
+    await prepareFullQuoteScreenshot(popup);
+
     const screenshotBuffer = await popup.screenshot({
       path: screenshotPath,
       type: "png",
@@ -237,6 +291,10 @@ async function runCetelemFlow(payload) {
   } catch (error) {
     try {
       const target = popup || page;
+      if (popup) {
+        await prepareFullQuoteScreenshot(popup).catch(() => {});
+      }
+
       await target.screenshot({
         path: errorScreenshotPath,
         type: "png",

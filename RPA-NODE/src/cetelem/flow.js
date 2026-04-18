@@ -15,7 +15,7 @@ const {
     VIDEOS_DIR,
     assertCredentials,
 } = require("../config");
-const { fillClientData } = require("./form");
+const { fillClientData, fillVehicleData, readVehicleTotalAmount } = require("./form");
 
 const READY_TEXT_RAZON_SOCIAL = "capturar nombre de razon social como aparece en el registro del rfc o documentos oficiales";
 
@@ -34,6 +34,51 @@ function validateSession(pageOrPopup) {
     if (isDeadSession(currentUrl)) {
         throw new Error("Sesion invalida detectada. Cayo en josso_security_check.");
     }
+}
+
+async function prepareFullQuoteScreenshot(popup) {
+    await popup.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
+
+    await popup.evaluate(() => {
+        const target = document.querySelector("#vehicleTotalAmount")
+            || document.querySelector("#vehicleVersion")
+            || document.querySelector("#vehiclePriceTax");
+
+        if (target && typeof target.scrollIntoView === "function") {
+            target.scrollIntoView({ block: "center", inline: "nearest" });
+        }
+
+        const visited = new Set();
+        let current = target instanceof Element ? target.parentElement : document.body;
+
+        while (current) {
+            if (!visited.has(current)) {
+                visited.add(current);
+                const computed = window.getComputedStyle(current);
+                const overflowY = computed.overflowY;
+                const overflow = computed.overflow;
+                const isScrollable = ["auto", "scroll"].includes(overflowY)
+                    || ["auto", "scroll"].includes(overflow)
+                    || current.scrollHeight > current.clientHeight + 20;
+
+                if (isScrollable) {
+                    current.style.overflow = "visible";
+                    current.style.overflowY = "visible";
+                    current.style.height = "auto";
+                    current.style.maxHeight = "none";
+                }
+            }
+
+            current = current.parentElement;
+        }
+
+        document.documentElement.style.scrollBehavior = "auto";
+        document.body.style.overflow = "visible";
+        document.body.style.height = "auto";
+        document.body.style.maxHeight = "none";
+    });
+
+    await popup.waitForTimeout(1200);
 }
 
 async function waitForValidQuoteScreen(popup, timeout = 45000) {
@@ -211,8 +256,15 @@ async function runCetelemFlow(payload) {
         popup.on("console", onConsole);
 
         await fillClientData(popup, payload);
+        await fillVehicleData(popup, payload);
+        const vehicleTotalAmount = await readVehicleTotalAmount(popup);
+        await prepareFullQuoteScreenshot(popup);
 
-        const screenshotBuffer = await popup.screenshot({ path: screenshotPath, type: "png" });
+        const screenshotBuffer = await popup.screenshot({
+            path: screenshotPath,
+            type: "png",
+            fullPage: true,
+        });
         fs.writeFileSync(consolePath, consoleLogs.join("\n"), "utf8");
 
         return {
@@ -220,6 +272,7 @@ async function runCetelemFlow(payload) {
             elapsedSeconds: Number(((performance.now() - startTime) / 1000).toFixed(2)),
             screenshotBuffer,
             screenshotPath,
+            vehicleTotalAmount,
             videoPaths: {
                 page: null,
                 popup: null,
@@ -228,7 +281,14 @@ async function runCetelemFlow(payload) {
     } catch (error) {
         try {
             const target = popup || page;
-            await target.screenshot({ path: errorScreenshotPath, type: "png" });
+            if (popup) {
+                await prepareFullQuoteScreenshot(popup).catch(() => {});
+            }
+            await target.screenshot({
+                path: errorScreenshotPath,
+                type: "png",
+                fullPage: true,
+            });
             console.log(`Screenshot error: ${errorScreenshotPath}`);
         } catch {
             // no-op

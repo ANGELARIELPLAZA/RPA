@@ -21,6 +21,7 @@ function createApiServer() {
                     status: job.status,
                     statusUrl: `/status/${job.id}`,
                     imageUrl: `/cotizar-cetelem-async/${job.id}/image`,
+                    resultUrl: `/cotizar-cetelem-async/${job.id}/result`,
                 });
                 return;
             }
@@ -71,6 +72,33 @@ function createApiServer() {
                     "X-Elapsed-Seconds": String(job.result.elapsedSeconds),
                 });
                 response.end(job.result.screenshotBuffer);
+                return;
+            }
+
+            const resultMatch = request.method === "GET"
+                ? request.url.match(/^\/cotizar-cetelem-async\/([a-f0-9-]+)\/result$/)
+                : null;
+
+            if (resultMatch) {
+                const job = getJob(resultMatch[1]);
+
+                if (!job) {
+                    sendJson(response, 404, { error: "Task no encontrada" });
+                    return;
+                }
+
+                if (job.status !== "completed" || !job.result?.screenshotBuffer) {
+                    sendJson(response, 409, { error: "El resultado aun no esta listo", status: job.status });
+                    return;
+                }
+
+                sendJson(response, 200, {
+                    screenshotRaw: job.result.screenshotBuffer.toString("base64"),
+                    screenshotPath: job.result.screenshotPath,
+                    consolePath: job.result.consolePath,
+                    elapsedSeconds: job.result.elapsedSeconds,
+                    vehicleTotalAmount: job.result.vehicleTotalAmount || null,
+                });
                 return;
             }
 
