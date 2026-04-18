@@ -1,26 +1,73 @@
 const http = require("http");
 const { runCetelemFlowWithRetries } = require("./cetelem/flow");
+const { createJob, deleteExpiredJobs, getJob, serializeJob, updateJob } = require("./jobs/store");
 
 function createApiServer() {
     return http.createServer(async (request, response) => {
         try {
+            deleteExpiredJobs();
+
             if (request.method === "POST" && request.url === "/cotizar-cetelem-async") {
                 const payload = await readJsonBody(request);
-                const result = await runCetelemFlowWithRetries(payload);
+                const job = createJob(payload);
 
-                response.writeHead(200, {
-                    "Content-Type": "image/png",
-                    "Content-Length": Buffer.byteLength(result.screenshotBuffer),
-                    "X-Screenshot-Path": result.screenshotPath,
-                    "X-Console-Path": result.consolePath,
-                    "X-Elapsed-Seconds": String(result.elapsedSeconds),
+                void executeJob(job.id, payload);
+
+                sendJson(response, 202, {
+                    jobId: job.id,
+                    status: job.status,
+                    statusUrl: `/cotizar-cetelem-async/${job.id}`,
+                    imageUrl: `/cotizar-cetelem-async/${job.id}/image`,
                 });
-                response.end(result.screenshotBuffer);
                 return;
             }
 
             if (request.method === "GET" && request.url === "/health") {
                 sendJson(response, 200, { ok: true });
+                return;
+            }
+
+            const statusMatch = request.method === "GET"
+                ? request.url.match(/^\/cotizar-cetelem-async\/([a-f0-9-]+)$/)
+                : null;
+
+            if (statusMatch) {
+                const job = getJob(statusMatch[1]);
+
+                if (!job) {
+                    sendJson(response, 404, { error: "Job no encontrado" });
+                    return;
+                }
+
+                sendJson(response, 200, serializeJob(job));
+                return;
+            }
+
+            const imageMatch = request.method === "GET"
+                ? request.url.match(/^\/cotizar-cetelem-async\/([a-f0-9-]+)\/image$/)
+                : null;
+
+            if (imageMatch) {
+                const job = getJob(imageMatch[1]);
+
+                if (!job) {
+                    sendJson(response, 404, { error: "Job no encontrado" });
+                    return;
+                }
+
+                if (job.status !== "completed" || !job.result?.screenshotBuffer) {
+                    sendJson(response, 409, { error: "La imagen aun no esta lista", status: job.status });
+                    return;
+                }
+
+                response.writeHead(200, {
+                    "Content-Type": "image/png",
+                    "Content-Length": Buffer.byteLength(job.result.screenshotBuffer),
+                    "X-Screenshot-Path": job.result.screenshotPath,
+                    "X-Console-Path": job.result.consolePath,
+                    "X-Elapsed-Seconds": String(job.result.elapsedSeconds),
+                });
+                response.end(job.result.screenshotBuffer);
                 return;
             }
 
@@ -30,6 +77,24 @@ function createApiServer() {
             sendJson(response, 500, { error: error.message });
         }
     });
+}
+
+async function executeJob(jobId, payload) {
+    updateJob(jobId, { status: "running", error: null });
+
+    try {
+        const result = await runCetelemFlowWithRetries(payload);
+        updateJob(jobId, {
+            status: "completed",
+            result,
+            error: null,
+        });
+    } catch (error) {
+        updateJob(jobId, {
+            status: "failed",
+            error: error.message,
+        });
+    }
 }
 
 function readJsonBody(request) {
