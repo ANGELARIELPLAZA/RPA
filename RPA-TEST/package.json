@@ -1,0 +1,17 @@
+{
+  "name": "rpa-test",
+  "version": "1.0.0",
+  "main": "main.js",
+  "scripts": {
+    "start": "node main.js",
+    "run": "node main.js run"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "API QTEST para cotizacion Cetelem individual y masiva",
+  "dependencies": {
+    "dotenv": "^17.4.2",
+    "playwright": "^1.59.1"
+  }
+}

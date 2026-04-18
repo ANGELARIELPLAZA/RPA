@@ -4,7 +4,7 @@
 __pycache__/
 *.py[cod]
 *$py.class
-logs/
+*logs/
 
 # Entornos virtuales
 venv/
@@ -30,6 +30,8 @@ htmlcov/
 
 # Logs
 *.log
+logs/
+**/logs/
 
 # Variables sensibles
 .env
@@ -41,8 +43,18 @@ htmlcov/
 .idea/
 .DS_Store
 Thumbs.db
-screenshots/*
-videos/*
+
+# Evidencias / artefactos de ejecucion
+screenshots/
+**/screenshots/
+videos/
+**/videos/
+evidencias/
+**/evidencias/
+evidence/
+**/evidence/
+playwright-report/
+test-results/
 
 # =========================
 # Node.js
