@@ -75,8 +75,27 @@ const VEHICULO_FIELDS = [
     { key: "gapInsuranceType", radioName: "gapInsuranceType", type: "radio", required: false, timeout: 10000, retries: 3, transform: normalizeUppercase },
 ];
 
+const CREDITO_FIELDS = [
+    { key: "creditDepositPercent", selector: "#creditDepositPercent", type: "input", required: false, timeout: 15000, retries: 3, transform: normalizeString },
+    { key: "creditDepositAmount", selector: "#creditDepositAmount", type: "input", required: false, timeout: 15000, retries: 3, transform: normalizeString },
+    { key: "creditDepositPlan", selector: "#creditDepositPlan", type: "select", required: false, timeout: 30000, retries: 6, transform: normalizeString },
+    { key: "creditDepositTerm", selector: "#creditDepositTerm", type: "select", required: false, timeout: 30000, retries: 6, transform: normalizeString },
+];
+
+const SEGURO_FIELDS = [
+    { key: "insuranceCoverage", selector: "#insuranceCoverage", type: "select", required: false, timeout: 30000, retries: 6, transform: normalizeString },
+    { key: "insuranceCP", selector: "#insuranceCP", type: "input", required: true, timeout: 15000, retries: 3, transform: normalizeString },
+    { key: "insuranceRecruitment", selector: "#insuranceRecruitment", type: "select", required: true, timeout: 30000, retries: 6, transform: normalizeString },
+    { key: "insuranceType", selector: "#insuranceType", type: "select", required: true, timeout: 30000, retries: 6, transform: normalizeString },
+    { key: "insuranceTermRemnant", selector: "#insuranceTermRemnant", type: "select", required: false, timeout: 30000, retries: 6, transform: normalizeString },
+    { key: "insurancePaymentTermRemnant", selector: "#insurancePaymentTermRemnant", type: "select", required: true, timeout: 30000, retries: 6, transform: normalizeString },
+    { key: "insuranceCoverageLorant", selector: "#insuranceCoverageLorant", type: "select", required: true, timeout: 30000, retries: 6, transform: normalizeUppercase },
+];
+
 module.exports = {
     CLIENTE_BASE_FIELDS,
     CLIENTE_FIELDS_BY_TYPE,
+    CREDITO_FIELDS,
+    SEGURO_FIELDS,
     VEHICULO_FIELDS,
 };

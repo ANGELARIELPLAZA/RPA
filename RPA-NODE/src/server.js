@@ -97,6 +97,10 @@ function createApiServer() {
                     screenshotPath: job.result.screenshotPath,
                     consolePath: job.result.consolePath,
                     elapsedSeconds: job.result.elapsedSeconds,
+                    executedFlows: job.result.executedFlows || [],
+                    stageTimings: job.result.stageTimings || [],
+                    insuranceMonthlyFee: job.result.insuranceMonthlyFee || null,
+                    insuranceOptions: job.result.insuranceOptions || [],
                     vehiclePriceTax: job.result.vehiclePriceTax || null,
                     vehicleTotalAmount: job.result.vehicleTotalAmount || null,
                 });

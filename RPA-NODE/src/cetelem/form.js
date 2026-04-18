@@ -1,4 +1,15 @@
-const { CLIENTE_BASE_FIELDS, CLIENTE_FIELDS_BY_TYPE, VEHICULO_FIELDS } = require("./fields");
+const { CLIENTE_BASE_FIELDS, CLIENTE_FIELDS_BY_TYPE, CREDITO_FIELDS, SEGURO_FIELDS, VEHICULO_FIELDS } = require("./fields");
+
+const INSURANCE_CARRIER_ALIASES = {
+    CHUBB: "ABA",
+    ABA: "ABA",
+    QUALITAS: "QUALITAS",
+    MAPFRE: "MAPFRE",
+    GNP: "GNP",
+    ZURICH: "ZURICH",
+    HDI: "HDI",
+    INBURSA: "INBURSA",
+};
 
 function getNestedValue(object, key) {
     return key.split(".").reduce((current, part) => current?.[part], object);
@@ -83,11 +94,36 @@ async function waitForSelectReady(page, selector, expectedValue, options = {}) {
                 return false;
             }
 
-            return options.some((option) => String(option.value) === String(currentValue));
+            return options.some(
+                (option) =>
+                    String(option.value) === String(currentValue) ||
+                    String(option.textContent || "").trim().toLowerCase() === String(currentValue).trim().toLowerCase()
+            );
         },
         { selector, expectedValue: String(expectedValue), waitOptionsLoaded },
         { timeout }
     );
+}
+
+async function resolveSelectOptionValue(page, selector, expectedValue, options = {}) {
+    const timeout = options.timeout ?? 15000;
+
+    await waitForSelectReady(page, selector, expectedValue, {
+        timeout,
+        waitOptionsLoaded: options.waitOptionsLoaded,
+    });
+
+    return page.locator(selector).evaluate((element, currentValue) => {
+        const normalizedValue = String(currentValue).trim().toLowerCase();
+        const option = Array.from(element.options || []).find((currentOption) => {
+            const value = String(currentOption.value).trim().toLowerCase();
+            const text = String(currentOption.textContent || "").trim().toLowerCase();
+
+            return value === normalizedValue || text === normalizedValue;
+        });
+
+        return option ? option.value : null;
+    }, String(expectedValue));
 }
 
 async function selectAndVerify(page, selector, value, options = {}) {
@@ -100,13 +136,17 @@ async function selectAndVerify(page, selector, value, options = {}) {
 
     for (let attempt = 1; attempt <= retries; attempt += 1) {
         try {
-            await waitForSelectReady(page, selector, expectedValue, { timeout });
-            await page.selectOption(selector, expectedValue);
+            const optionValue = await resolveSelectOptionValue(page, selector, expectedValue, { timeout });
+            if (optionValue === null || optionValue === undefined) {
+                throw new Error(`No existe opcion con value/texto=${expectedValue}`);
+            }
+
+            await page.selectOption(selector, String(optionValue));
             await page.waitForTimeout(settleMs);
 
             const selectedValue = await page.locator(selector).inputValue();
-            if (String(selectedValue) !== expectedValue) {
-                throw new Error(`El portal no conservo el valor. Esperado=${expectedValue}, actual=${selectedValue}`);
+            if (String(selectedValue) !== String(optionValue)) {
+                throw new Error(`El portal no conservo el valor. Esperado=${optionValue}, actual=${selectedValue}`);
             }
 
             return;
@@ -161,6 +201,7 @@ async function fillAndVerify(page, selector, value, options = {}) {
                 "vehiclePriceTax",
                 "vehicleAccesoriesAmount",
                 "vehicleChargeStationAmount",
+                "creditDepositAmount",
             ].includes(fieldName);
 
             if (isMoneyField) {
@@ -366,12 +407,235 @@ async function fillVehicleData(page, payload) {
     await applyFieldSet(page, vehiculo, VEHICULO_FIELDS);
 }
 
+async function fillCreditData(page, payload) {
+    const credito = payload?.credito;
+
+    if (!credito) {
+        return;
+    }
+
+    if (typeof credito !== "object") {
+        throw new Error("El objeto credito debe ser un JSON valido");
+    }
+
+    await page.locator("#credit_data").scrollIntoViewIfNeeded({ timeout: 10000 }).catch(() => {});
+
+    const hasDepositPercent = !isEmptyValue(credito.creditDepositPercent);
+    const hasDepositAmount = !isEmptyValue(credito.creditDepositAmount);
+    const shouldUseDepositAmount = !hasDepositPercent && hasDepositAmount;
+    const fields = CREDITO_FIELDS.filter((field) => {
+        if (field.key === "creditDepositPercent") {
+            return hasDepositPercent;
+        }
+
+        if (field.key === "creditDepositAmount") {
+            return shouldUseDepositAmount;
+        }
+
+        return true;
+    });
+
+    console.log(`Campos de credito a llenar: ${fields.map((field) => field.key).join(", ") || "ninguno"}`);
+    await applyFieldSet(page, credito, fields);
+    await assertNoCreditDepositMinimumError(page);
+}
+
+async function fillInsuranceData(page, payload) {
+    const seguro = payload?.seguro;
+
+    if (!seguro) {
+        return;
+    }
+
+    if (typeof seguro !== "object") {
+        throw new Error("El objeto seguro debe ser un JSON valido");
+    }
+
+    await page.locator("#insurance_data").scrollIntoViewIfNeeded({ timeout: 10000 }).catch(() => {});
+    await applyFieldSet(page, seguro, SEGURO_FIELDS);
+
+    const insuranceOption = seguro.insuranceOption || seguro.aseguradora || seguro.insuranceCarrier;
+    await selectInsuranceOption(page, insuranceOption);
+}
+
+function normalizeInsuranceCarrier(value) {
+    if (isEmptyValue(value)) {
+        return null;
+    }
+
+    const normalized = String(value).trim().toUpperCase().replace(/[^A-Z0-9]/g, "");
+    return INSURANCE_CARRIER_ALIASES[normalized] || normalized;
+}
+
+async function readInsuranceQuotes(page) {
+    return page.locator("#trAseguradoras_radios").evaluate((row) => {
+        return Array.from(row.querySelectorAll('input[type="radio"][name="insuranceOption"]')).map((radio) => {
+            const rawId = radio.id || "";
+            const carrier = rawId.replace(/^insuranceRadio_/, "");
+            const label = row.querySelector(`label[for="${rawId}"]`) || document.querySelector(`label[for="${rawId}"]`);
+            const rawAmount = String(label?.textContent || "").trim();
+            const amount = Number(rawAmount.replace(/[^0-9.-]/g, ""));
+
+            return {
+                carrier,
+                disabled: Boolean(radio.disabled),
+                checked: Boolean(radio.checked),
+                rawAmount,
+                amount: Number.isFinite(amount) ? amount : 0,
+            };
+        });
+    }).catch(() => []);
+}
+
+async function readInsuranceOptions(page) {
+    const quotes = await readInsuranceQuotes(page);
+
+    return quotes
+        .filter((quote) => quote.amount > 0)
+        .map((quote) => ({
+            name: quote.carrier,
+            rawAmount: quote.rawAmount,
+            amount: quote.amount,
+            disabled: quote.disabled,
+            selected: quote.checked,
+        }));
+}
+
+function hasValidInsuranceQuote(quotes, carrier = null) {
+    const targetCarrier = normalizeInsuranceCarrier(carrier);
+    return quotes.some((quote) => {
+        const carrierMatches = !targetCarrier || quote.carrier === targetCarrier;
+        return carrierMatches && !quote.disabled && quote.amount > 0;
+    });
+}
+
+async function waitForInsuranceQuotes(page, carrier = null, timeout = 45000) {
+    const startedAt = Date.now();
+
+    while (Date.now() - startedAt < timeout) {
+        const quotes = await readInsuranceQuotes(page);
+
+        if (hasValidInsuranceQuote(quotes, carrier)) {
+            return quotes;
+        }
+
+        await page.waitForTimeout(1000);
+    }
+
+    return readInsuranceQuotes(page);
+}
+
+async function refreshInsuranceQuotes(page) {
+    const triggerSelectors = [
+        "#insuranceCoverageLorant",
+        "#insurancePaymentTermRemnant",
+        "#insuranceType",
+        "#insuranceRecruitment",
+    ];
+
+    for (const selector of triggerSelectors) {
+        const refreshed = await page.locator(selector).evaluate((select) => {
+            if (!select || select.tagName !== "SELECT" || select.disabled) {
+                return false;
+            }
+
+            const currentValue = select.value;
+            const options = Array.from(select.options || [])
+                .map((option) => option.value)
+                .filter((value) => value && value !== "-1");
+
+            const alternateValue = options.find((value) => value !== currentValue);
+
+            if (alternateValue) {
+                select.value = alternateValue;
+                select.dispatchEvent(new Event("change", { bubbles: true }));
+            }
+
+            setTimeout(() => {
+                select.value = currentValue;
+                select.dispatchEvent(new Event("change", { bubbles: true }));
+            }, 500);
+
+            return true;
+        }).catch(() => false);
+
+        if (refreshed) {
+            console.log(`Recargando tabla de aseguradoras con ${selector}`);
+            await page.waitForTimeout(2500);
+            return;
+        }
+    }
+
+    console.log("[WARN] No se encontro combo disponible para recargar aseguradoras.");
+}
+
+async function selectInsuranceOption(page, requestedCarrier) {
+    const targetCarrier = normalizeInsuranceCarrier(requestedCarrier);
+    let quotes = [];
+
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+        quotes = await waitForInsuranceQuotes(page, targetCarrier, 45000);
+
+        if (hasValidInsuranceQuote(quotes, targetCarrier)) {
+            break;
+        }
+
+        console.log(`[WARN] Tabla de aseguradoras sin datos validos intento ${attempt}/3.`);
+        if (attempt < 3) {
+            await refreshInsuranceQuotes(page);
+        }
+    }
+
+    const validQuotes = quotes.filter((quote) => !quote.disabled && quote.amount > 0);
+    if (validQuotes.length === 0) {
+        throw new Error("No se cargaron opciones validas de aseguradora.");
+    }
+
+    const selectedQuote = targetCarrier
+        ? validQuotes.find((quote) => quote.carrier === targetCarrier)
+        : validQuotes.sort((left, right) => left.amount - right.amount)[0];
+
+    if (!selectedQuote) {
+        throw new Error(`No se cargo una opcion valida para la aseguradora ${targetCarrier}.`);
+    }
+
+    const radioSelector = `#insuranceRadio_${selectedQuote.carrier}`;
+    await page.locator(radioSelector).check({ timeout: 10000 });
+    await page.waitForTimeout(1000);
+
+    console.log(`Aseguradora seleccionada: ${selectedQuote.carrier} ${selectedQuote.rawAmount}`);
+}
+
+async function assertNoCreditDepositMinimumError(page) {
+    await page.waitForTimeout(500);
+
+    const errorContent = page
+        .locator(".creditDepositPercentformError .formErrorContent", {
+            hasText: "Favor de validar que el enganche sea de un mínimo del 15%",
+        })
+        .first();
+
+    const isVisible = await errorContent.isVisible().catch(() => false);
+    if (!isVisible) {
+        return;
+    }
+
+    const message = (await errorContent.innerText().catch(() => "")).replace(/^\*\s*/, "").trim()
+        || "Favor de validar que el enganche sea de un mínimo del 15%";
+
+    throw new Error(message);
+}
+
 async function readVehicleTotalAmount(page) {
     return readMoneyField(page, "#vehicleTotalAmount");
 }
 
 async function readVehiclePriceTax(page) {
     return readMoneyField(page, "#vehiclePriceTax");
+}
+
+async function readInsuranceMonthlyFee(page) {
+    return readMoneyField(page, "#insuranceMonthlyFee");
 }
 
 async function readMoneyField(page, selector) {
@@ -398,7 +662,11 @@ async function readMoneyField(page, selector) {
 
 module.exports = {
     fillClientData,
+    fillCreditData,
+    fillInsuranceData,
     fillVehicleData,
+    readInsuranceOptions,
+    readInsuranceMonthlyFee,
     readVehiclePriceTax,
     readVehicleTotalAmount,
 };

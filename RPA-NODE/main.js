@@ -6,6 +6,7 @@ async function runCli() {
     const result = await runCetelemFlowWithRetries(DEFAULT_CLIENT_PAYLOAD);
 
     console.log(`OK | Tiempo total: ${result.elapsedSeconds}s`);
+    console.log(`Flujos ejecutados: ${(result.executedFlows || []).join(", ") || "N/A"}`);
     console.log(`Vehicle total amount: ${result.vehicleTotalAmount?.raw || "N/A"}`);
     console.log(`Screenshot: ${result.screenshotPath}`);
     console.log(`Console log: ${result.consolePath}`);

@@ -15,9 +15,26 @@ const {
     VIDEOS_DIR,
     assertCredentials,
 } = require("../config");
-const { fillClientData, fillVehicleData, readVehiclePriceTax, readVehicleTotalAmount } = require("./form");
+const {
+    fillClientData,
+    fillCreditData,
+    fillInsuranceData,
+    fillVehicleData,
+    readInsuranceMonthlyFee,
+    readInsuranceOptions,
+    readVehiclePriceTax,
+    readVehicleTotalAmount,
+} = require("./form");
 
 const READY_TEXT_RAZON_SOCIAL = "capturar nombre de razon social como aparece en el registro del rfc o documentos oficiales";
+const SYSTEMA_EXPERTO_ERROR_TEXT = "Error obteniendo variables para Systema Experto";
+
+const DATA_FLOWS = {
+    cliente: fillClientData,
+    vehiculo: fillVehicleData,
+    credito: fillCreditData,
+    seguro: fillInsuranceData,
+};
 
 function createTimestamp() {
     return new Date().toISOString().replace(/[-:]/g, "").replace(/\..+/, "").replace("T", "_");
@@ -34,6 +51,26 @@ function validateSession(pageOrPopup) {
     if (isDeadSession(currentUrl)) {
         throw new Error("Sesion invalida detectada. Cayo en josso_security_check.");
     }
+}
+
+function registerDialogHandler(pageOrPopup) {
+    pageOrPopup.on("dialog", async (dialog) => {
+        const message = dialog.message() || "";
+        console.log(`DIALOG: ${message}`);
+
+        try {
+            if (message.includes(SYSTEMA_EXPERTO_ERROR_TEXT)) {
+                await dialog.accept();
+                console.log("DIALOG aceptado: Systema Experto");
+                return;
+            }
+
+            await dialog.dismiss();
+            console.log("DIALOG descartado");
+        } catch (error) {
+            console.log(`[WARN] No se pudo cerrar dialog: ${error.message}`);
+        }
+    });
 }
 
 async function prepareFullQuoteScreenshot(popup) {
@@ -226,6 +263,29 @@ function moveArtifact(sourcePath, targetPath) {
     }
 }
 
+async function closeQuoteSession(popup) {
+    if (!popup || popup.isClosed()) {
+        return;
+    }
+
+    try {
+        const closeButton = popup.locator("#buttonClose").first();
+        await closeButton.waitFor({ state: "visible", timeout: 5000 });
+        await closeButton.click({ timeout: 5000 });
+
+        const confirmModal = popup.locator(".messager-body", {
+            hasText: "Está seguro que desea salir de la cotización",
+        }).last();
+
+        await confirmModal.waitFor({ state: "visible", timeout: 7000 });
+        await confirmModal.locator("a.l-btn", { hasText: /^Ok$/ }).last().click({ timeout: 5000 });
+        await popup.waitForTimeout(1000);
+        console.log("Sesion de cotizacion cerrada desde buttonClose.");
+    } catch (error) {
+        console.log(`[WARN] No se pudo cerrar sesion desde buttonClose: ${error.message}`);
+    }
+}
+
 async function performLogin(page) {
     console.log("Abriendo login...");
     await page.goto(LOGIN_URL, { timeout: 30000 });
@@ -258,6 +318,53 @@ async function performLogin(page) {
     return popup;
 }
 
+function elapsedSecondsSince(startTime) {
+    return Number(((performance.now() - startTime) / 1000).toFixed(2));
+}
+
+function normalizeRequestedDataFlows(payload) {
+    const requestedFlows = payload?.flujos || payload?.flows;
+    const nivelDetalle = payload?.NIVEL_DETALLE || payload?.nivelDetalle || payload?.nivel_detalle;
+
+    if (Array.isArray(requestedFlows) && requestedFlows.length > 0) {
+        return requestedFlows.map((flow) => String(flow).trim().toLowerCase()).filter(Boolean);
+    }
+
+    if (nivelDetalle) {
+        return [String(nivelDetalle).trim().toLowerCase()];
+    }
+
+    const presentFlows = Object.keys(DATA_FLOWS).filter((flow) => payload?.[flow] !== undefined);
+    return presentFlows.length > 0 ? presentFlows : ["cliente"];
+}
+
+async function runRequestedDataFlows(page, payload) {
+    const flows = normalizeRequestedDataFlows(payload);
+    const timings = [];
+
+    for (const flow of flows) {
+        const fillFlow = DATA_FLOWS[flow];
+
+        if (!fillFlow) {
+            throw new Error(`Flujo no soportado: ${flow}`);
+        }
+
+        if (payload?.[flow] === undefined) {
+            throw new Error(`No viene el objeto ${flow} en el JSON`);
+        }
+
+        console.log(`Ejecutando flujo de datos: ${flow}`);
+        const flowStartTime = performance.now();
+        await fillFlow(page, payload);
+        timings.push({
+            name: flow,
+            elapsedSeconds: elapsedSecondsSince(flowStartTime),
+        });
+    }
+
+    return { flows, timings };
+}
+
 async function runCetelemFlow(payload, options = {}) {
     const taskId = options.taskId || null;
     const timestamp = createTimestamp();
@@ -279,16 +386,57 @@ async function runCetelemFlow(payload, options = {}) {
     };
 
     page.on("console", onConsole);
+    registerDialogHandler(page);
 
     try {
         console.log(`Carpeta de videos: ${VIDEOS_DIR}`);
+        const loginStartTime = performance.now();
         popup = await performLogin(page);
+        const loginElapsedSeconds = elapsedSecondsSince(loginStartTime);
         popup.on("console", onConsole);
+        registerDialogHandler(popup);
 
-        await fillClientData(popup, payload);
-        await fillVehicleData(popup, payload);
-        const vehiclePriceTax = await readVehiclePriceTax(popup);
-        const vehicleTotalAmount = await readVehicleTotalAmount(popup);
+        const { flows: executedFlows, timings: flowTimings } = await runRequestedDataFlows(popup, payload);
+        const stageTimings = [
+            {
+                name: "login",
+                elapsedSeconds: loginElapsedSeconds,
+            },
+            ...flowTimings,
+        ];
+        let insuranceMonthlyFee = null;
+        let insuranceOptions = [];
+        let vehiclePriceTax = null;
+        let vehicleTotalAmount = null;
+
+        if (executedFlows.includes("vehiculo")) {
+            try {
+                vehiclePriceTax = await readVehiclePriceTax(popup);
+            } catch (error) {
+                console.log(`[WARN] No se pudo leer vehiclePriceTax: ${error.message}`);
+            }
+
+            try {
+                vehicleTotalAmount = await readVehicleTotalAmount(popup);
+            } catch (error) {
+                console.log(`[WARN] No se pudo leer vehicleTotalAmount: ${error.message}`);
+            }
+        }
+
+        if (executedFlows.includes("seguro")) {
+            try {
+                insuranceOptions = await readInsuranceOptions(popup);
+            } catch (error) {
+                console.log(`[WARN] No se pudieron leer opciones de seguro: ${error.message}`);
+            }
+
+            try {
+                insuranceMonthlyFee = await readInsuranceMonthlyFee(popup);
+            } catch (error) {
+                console.log(`[WARN] No se pudo leer insuranceMonthlyFee: ${error.message}`);
+            }
+        }
+
         await prepareFullQuoteScreenshot(popup);
 
         const screenshotBuffer = await popup.screenshot({
@@ -303,6 +451,10 @@ async function runCetelemFlow(payload, options = {}) {
             elapsedSeconds: Number(((performance.now() - startTime) / 1000).toFixed(2)),
             screenshotBuffer,
             screenshotPath,
+            executedFlows,
+            stageTimings,
+            insuranceMonthlyFee,
+            insuranceOptions,
             vehiclePriceTax,
             vehicleTotalAmount,
         };
@@ -348,6 +500,7 @@ async function runCetelemFlow(payload, options = {}) {
 
         try {
             if (popup) {
+                await closeQuoteSession(popup);
                 await popup.close();
             }
         } catch {
@@ -392,6 +545,8 @@ async function runCetelemFlowWithRetries(payload, options = {}) {
 }
 
 module.exports = {
+    normalizeRequestedDataFlows,
     runCetelemFlow,
     runCetelemFlowWithRetries,
+    runRequestedDataFlows,
 };

@@ -66,6 +66,10 @@ function serializeJob(job) {
             ? {
                 consolePath: job.result.consolePath,
                 elapsedSeconds: job.result.elapsedSeconds,
+                executedFlows: job.result.executedFlows || [],
+                stageTimings: job.result.stageTimings || [],
+                insuranceMonthlyFee: job.result.insuranceMonthlyFee || null,
+                insuranceOptions: job.result.insuranceOptions || [],
                 screenshotPath: job.result.screenshotPath,
                 vehiclePriceTax: job.result.vehiclePriceTax || null,
                 vehicleTotalAmount: job.result.vehicleTotalAmount || null,

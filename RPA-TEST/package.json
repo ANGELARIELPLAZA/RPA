@@ -3,14 +3,17 @@
   "version": "1.0.0",
   "main": "main.js",
   "scripts": {
-    "start": "node main.js",
-    "run": "node main.js run",
-    "simulate:5": "node main.js simulate5"
+    "start": "node main.js credito",
+    "health": "node main.js health",
+    "test:cliente": "node main.js cliente",
+    "test:vehiculo": "node main.js vehiculo",
+    "test:credito": "node main.js credito",
+    "test:completo": "node main.js completo"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "description": "API QTEST para cotizacion Cetelem individual y masiva",
+  "description": "Harness de pruebas para RPA-NODE",
   "dependencies": {
     "dotenv": "^17.4.2",
     "playwright": "^1.59.1"
