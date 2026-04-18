@@ -14,9 +14,9 @@ function createApiServer() {
                 void executeJob(job.id, payload);
 
                 sendJson(response, 202, {
-                    jobId: job.id,
+                    task_id: job.id,
                     status: job.status,
-                    statusUrl: `/cotizar-cetelem-async/${job.id}`,
+                    statusUrl: `/status/${job.id}`,
                     imageUrl: `/cotizar-cetelem-async/${job.id}/image`,
                 });
                 return;
@@ -28,14 +28,14 @@ function createApiServer() {
             }
 
             const statusMatch = request.method === "GET"
-                ? request.url.match(/^\/cotizar-cetelem-async\/([a-f0-9-]+)$/)
+                ? request.url.match(/^\/status\/([a-f0-9-]+)$/)
                 : null;
 
             if (statusMatch) {
                 const job = getJob(statusMatch[1]);
 
                 if (!job) {
-                    sendJson(response, 404, { error: "Job no encontrado" });
+                    sendJson(response, 404, { error: "Task no encontrada" });
                     return;
                 }
 
@@ -51,7 +51,7 @@ function createApiServer() {
                 const job = getJob(imageMatch[1]);
 
                 if (!job) {
-                    sendJson(response, 404, { error: "Job no encontrado" });
+                    sendJson(response, 404, { error: "Task no encontrada" });
                     return;
                 }
 
@@ -79,18 +79,18 @@ function createApiServer() {
     });
 }
 
-async function executeJob(jobId, payload) {
-    updateJob(jobId, { status: "running", error: null });
+async function executeJob(taskId, payload) {
+    updateJob(taskId, { status: "running", error: null });
 
     try {
         const result = await runCetelemFlowWithRetries(payload);
-        updateJob(jobId, {
+        updateJob(taskId, {
             status: "completed",
             result,
             error: null,
         });
     } catch (error) {
-        updateJob(jobId, {
+        updateJob(taskId, {
             status: "failed",
             error: error.message,
         });

@@ -6,7 +6,7 @@ npm start
 Endpoint:
 POST /cotizar-cetelem-async
 
-Devuelve 202 con jobId.
+Devuelve 202 con task_id.
 
 Body esperado:
 {
@@ -16,10 +16,10 @@ Body esperado:
 }
 
 Consultar estado:
-GET /cotizar-cetelem-async/:jobId
+GET /status/:task_id
 
 Descargar imagen raw cuando termine:
-GET /cotizar-cetelem-async/:jobId/image
+GET /cotizar-cetelem-async/:task_id/image
 
 Para ejecutar el flujo por CLI:
 npm run

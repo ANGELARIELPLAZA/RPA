@@ -4,11 +4,11 @@ const jobs = new Map();
 const JOB_TTL_MS = 30 * 60 * 1000;
 
 function createJob(payload) {
-    const jobId = crypto.randomUUID();
+    const taskId = crypto.randomUUID();
     const now = new Date().toISOString();
 
-    jobs.set(jobId, {
-        id: jobId,
+    jobs.set(taskId, {
+        id: taskId,
         payload,
         createdAt: now,
         updatedAt: now,
@@ -17,15 +17,15 @@ function createJob(payload) {
         error: null,
     });
 
-    return getJob(jobId);
+    return getJob(taskId);
 }
 
-function getJob(jobId) {
-    return jobs.get(jobId) || null;
+function getJob(taskId) {
+    return jobs.get(taskId) || null;
 }
 
-function updateJob(jobId, updates) {
-    const job = getJob(jobId);
+function updateJob(taskId, updates) {
+    const job = getJob(taskId);
     if (!job) {
         return null;
     }
@@ -36,17 +36,17 @@ function updateJob(jobId, updates) {
         updatedAt: new Date().toISOString(),
     };
 
-    jobs.set(jobId, nextJob);
+    jobs.set(taskId, nextJob);
     return nextJob;
 }
 
 function deleteExpiredJobs() {
     const now = Date.now();
 
-    for (const [jobId, job] of jobs.entries()) {
+    for (const [taskId, job] of jobs.entries()) {
         const updatedAt = Date.parse(job.updatedAt);
         if (!Number.isNaN(updatedAt) && now - updatedAt > JOB_TTL_MS) {
-            jobs.delete(jobId);
+            jobs.delete(taskId);
         }
     }
 }
