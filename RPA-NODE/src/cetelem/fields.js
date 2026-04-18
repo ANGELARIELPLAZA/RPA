@@ -56,7 +56,7 @@ function normalizeCheckbox(value) {
 
 const VEHICULO_FIELDS = [
     { key: "vehicleType", selector: "#vehicleType", type: "select", required: true, timeout: 20000, retries: 5, transform: normalizeString },
-    { key: "seminuevoCertificado", selector: 'input[type="checkbox"]#18n_seminuevo_certificado', type: "checkbox", required: false, timeout: 10000, retries: 3, transform: normalizeCheckbox },
+    { key: "seminuevoCertificado", selector: 'input[type="checkbox"][id="18n_seminuevo_certificado"]', type: "checkbox", required: false, timeout: 10000, retries: 3, transform: normalizeCheckbox },
     { key: "insuranceVehicleUse", selector: "#insuranceVehicleUse", type: "select", required: true, timeout: 20000, retries: 5, transform: normalizeString },
     { key: "tipoCarga", selector: "#tipoCarga", type: "select", required: false, timeout: 15000, retries: 3, transform: normalizeString },
     { key: "servicio", selector: "#servicio", type: "input", required: false, timeout: 15000, retries: 3, transform: normalizeUppercase },
