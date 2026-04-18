@@ -216,7 +216,11 @@ async function runCetelemFlow(payload) {
     await fillVehicleData(popup, payload);
     const vehicleTotalAmount = await readVehicleTotalAmount(popup);
 
-    const screenshotBuffer = await popup.screenshot({ path: screenshotPath, type: "png" });
+    const screenshotBuffer = await popup.screenshot({
+      path: screenshotPath,
+      type: "png",
+      fullPage: true,
+    });
     fs.writeFileSync(consolePath, consoleLogs.join("\n"), "utf8");
 
     return {
@@ -233,7 +237,11 @@ async function runCetelemFlow(payload) {
   } catch (error) {
     try {
       const target = popup || page;
-      await target.screenshot({ path: errorScreenshotPath, type: "png" });
+      await target.screenshot({
+        path: errorScreenshotPath,
+        type: "png",
+        fullPage: true,
+      });
       console.log(`Screenshot error: ${errorScreenshotPath}`);
     } catch {
     }
