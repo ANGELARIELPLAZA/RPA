@@ -1,5 +1,8 @@
+const fs = require("fs");
 const http = require("http");
+const path = require("path");
 const { runCetelemFlowWithRetries } = require("./cetelem/flow");
+const { SCREENSHOTS_DIR } = require("./config");
 const { createJob, deleteExpiredJobs, getJob, serializeJob, updateJob } = require("./jobs/store");
 
 function createApiServer() {
@@ -71,6 +74,27 @@ function createApiServer() {
                 return;
             }
 
+            const screenshotFileName = resolveScreenshotFileName(request.method, request.url);
+
+            if (screenshotFileName) {
+                const screenshotPath = path.join(SCREENSHOTS_DIR, screenshotFileName);
+
+                if (!isPathInsideDirectory(screenshotPath, SCREENSHOTS_DIR) || !fs.existsSync(screenshotPath)) {
+                    sendJson(response, 404, { error: "Screenshot no encontrada" });
+                    return;
+                }
+
+                const stat = fs.statSync(screenshotPath);
+
+                response.writeHead(200, {
+                    "Content-Type": "image/png",
+                    "Content-Length": stat.size,
+                    "Cache-Control": "no-store",
+                });
+                fs.createReadStream(screenshotPath).pipe(response);
+                return;
+            }
+
             sendJson(response, 404, { error: "Ruta no encontrada" });
         } catch (error) {
             console.error("Error en la API:", error.message);
@@ -132,6 +156,22 @@ function sendJson(response, statusCode, payload) {
         "Content-Length": Buffer.byteLength(body),
     });
     response.end(body);
+}
+
+function resolveScreenshotFileName(method, requestUrl) {
+    if (method !== "GET" || !requestUrl) {
+        return null;
+    }
+
+    const cleanUrl = requestUrl.split("?")[0];
+    const match = cleanUrl.match(/(?:^|\/)screenshots\/([^/]+\.png)$/i);
+
+    return match ? path.basename(match[1]) : null;
+}
+
+function isPathInsideDirectory(targetPath, baseDir) {
+    const relativePath = path.relative(baseDir, targetPath);
+    return relativePath && !relativePath.startsWith("..") && !path.isAbsolute(relativePath);
 }
 
 module.exports = {
