@@ -22,7 +22,7 @@ function createApiServer() {
                 return;
             }
 
-            if (request.method === "GET" && request.url === "/health") {
+            if (request.method === "GET" && (request.url === "/health" || request.url === "/healthz")) {
                 sendJson(response, 200, { ok: true });
                 return;
             }

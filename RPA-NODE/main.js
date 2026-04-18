@@ -1,6 +1,6 @@
 const { createApiServer } = require("./src/server");
 const { runCetelemFlowWithRetries } = require("./src/cetelem/flow");
-const { DEFAULT_CLIENT_PAYLOAD, SERVER_PORT } = require("./src/config");
+const { DEFAULT_CLIENT_PAYLOAD, SERVER_HOST, SERVER_PORT } = require("./src/config");
 
 async function runCli() {
     const result = await runCetelemFlowWithRetries(DEFAULT_CLIENT_PAYLOAD);
@@ -15,8 +15,8 @@ async function runCli() {
 function runServer() {
     const server = createApiServer();
 
-    server.listen(SERVER_PORT, () => {
-        console.log(`Servidor escuchando en http://localhost:${SERVER_PORT}`);
+    server.listen(SERVER_PORT, SERVER_HOST, () => {
+        console.log(`Servidor escuchando en http://${SERVER_HOST}:${SERVER_PORT}`);
     });
 }
 

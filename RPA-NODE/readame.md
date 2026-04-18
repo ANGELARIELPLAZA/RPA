@@ -3,6 +3,10 @@ Proyecto Node.js/Playwright.
 npm install
 npm start
 
+Salud:
+GET /health
+GET /healthz
+
 Endpoint:
 POST /cotizar-cetelem-async
 
@@ -23,3 +27,8 @@ GET /cotizar-cetelem-async/:task_id/image
 
 Para ejecutar el flujo por CLI:
 npm run
+
+Para exponer fuera del VPS:
+- el proceso ya escucha en 0.0.0.0
+- abre el puerto en firewall/security group
+- configura nginx para hacer proxy al puerto de Node
