@@ -1,4 +1,4 @@
-const { CLIENTE_BASE_FIELDS, CLIENTE_FIELDS_BY_TYPE, VEHICULO_FIELDS } = require("./fields");
+const { CLIENTE_BASE_FIELDS, CLIENTE_FIELDS_BY_TYPE, CREDITO_FIELDS, VEHICULO_FIELDS } = require("./fields");
 
 function getNestedValue(object, key) {
   return key.split(".").reduce((current, part) => current?.[part], object);
@@ -67,10 +67,38 @@ async function waitForSelectReady(page, selector, expectedValue, options = {}) {
         return false;
       }
 
-      return options.some((option) => String(option.value) === String(currentValue));
+      return options.some(
+        (option) =>
+          String(option.value) === String(currentValue) ||
+          String(option.textContent || "").trim().toLowerCase() === String(currentValue).trim().toLowerCase()
+      );
     },
     { selector, expectedValue: String(expectedValue), waitOptionsLoaded },
     { timeout }
+  );
+}
+
+async function resolveSelectOptionValue(page, selector, expectedValue, options = {}) {
+  const timeout = options.timeout ?? 15000;
+
+  await waitForSelectReady(page, selector, expectedValue, {
+    timeout,
+    waitOptionsLoaded: options.waitOptionsLoaded,
+  });
+
+  return page.locator(selector).evaluate(
+    (element, currentValue) => {
+      const normalizedValue = String(currentValue).trim().toLowerCase();
+      const option = Array.from(element.options || []).find((currentOption) => {
+        const value = String(currentOption.value).trim().toLowerCase();
+        const text = String(currentOption.textContent || "").trim().toLowerCase();
+
+        return value === normalizedValue || text === normalizedValue;
+      });
+
+      return option ? option.value : null;
+    },
+    String(expectedValue)
   );
 }
 
@@ -84,13 +112,17 @@ async function selectAndVerify(page, selector, value, options = {}) {
 
   for (let attempt = 1; attempt <= retries; attempt += 1) {
     try {
-      await waitForSelectReady(page, selector, expectedValue, { timeout });
-      await page.selectOption(selector, expectedValue);
+      const optionValue = await resolveSelectOptionValue(page, selector, expectedValue, { timeout });
+      if (optionValue === null || optionValue === undefined) {
+        throw new Error(`No existe opcion con value/texto=${expectedValue}`);
+      }
+
+      await page.selectOption(selector, String(optionValue));
       await page.waitForTimeout(settleMs);
 
       const selectedValue = await page.locator(selector).inputValue();
-      if (String(selectedValue) !== expectedValue) {
-        throw new Error(`El portal no conservo el valor. Esperado=${expectedValue}, actual=${selectedValue}`);
+      if (String(selectedValue) !== String(optionValue)) {
+        throw new Error(`El portal no conservo el valor. Esperado=${optionValue}, actual=${selectedValue}`);
       }
 
       return;
@@ -334,8 +366,44 @@ async function fillVehicleData(page, payload) {
   await applyFieldSet(page, vehiculo, VEHICULO_FIELDS);
 }
 
+async function fillCreditData(page, payload) {
+  const credito = payload?.credito;
+
+  if (!credito) {
+    return;
+  }
+
+  if (typeof credito !== "object") {
+    throw new Error("El objeto credito debe ser un JSON valido");
+  }
+
+  const hasDepositPercent = !isEmptyValue(credito.creditDepositPercent);
+  const hasDepositAmount = !isEmptyValue(credito.creditDepositAmount);
+  const shouldUseDepositAmount = !hasDepositPercent && hasDepositAmount;
+  const fields = CREDITO_FIELDS.filter((field) => {
+    if (field.key === "creditDepositPercent") {
+      return hasDepositPercent;
+    }
+
+    if (field.key === "creditDepositAmount") {
+      return shouldUseDepositAmount;
+    }
+
+    return true;
+  });
+
+  await applyFieldSet(page, credito, fields);
+}
+
 async function readVehicleTotalAmount(page) {
-  const selector = "#vehicleTotalAmount";
+  return readAmountInput(page, "#vehicleTotalAmount");
+}
+
+async function readVehiclePriceTax(page) {
+  return readAmountInput(page, "#vehiclePriceTax");
+}
+
+async function readAmountInput(page, selector) {
 
   await page.waitForSelector(selector, { state: "attached", timeout: 15000 });
   await page.waitForFunction(
@@ -364,6 +432,8 @@ async function readVehicleTotalAmount(page) {
 
 module.exports = {
   fillClientData,
+  fillCreditData,
   fillVehicleData,
+  readVehiclePriceTax,
   readVehicleTotalAmount,
 };

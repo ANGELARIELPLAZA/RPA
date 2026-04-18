@@ -9,8 +9,6 @@ async function runCli() {
     console.log(`Vehicle total amount: ${result.vehicleTotalAmount?.raw || "N/A"}`);
     console.log(`Screenshot: ${result.screenshotPath}`);
     console.log(`Console log: ${result.consolePath}`);
-    console.log(`Video page: ${result.videoPaths.page || "N/A"}`);
-    console.log(`Video popup: ${result.videoPaths.popup || "N/A"}`);
 }
 
 function runServer() {

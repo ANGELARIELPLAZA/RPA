@@ -1,21 +1,45 @@
 const http = require("http");
+const { DEFAULT_BATCH_CONCURRENCY, MAX_BATCH_CONCURRENCY } = require("./config");
 
 function normalizeBatchPayload(payload) {
   if (!payload || typeof payload !== "object") {
     throw new Error("El body JSON es obligatorio");
   }
 
-  if (!Array.isArray(payload.clientes) || payload.clientes.length === 0) {
+  if (!Number.isInteger(MAX_BATCH_CONCURRENCY) || MAX_BATCH_CONCURRENCY < 1) {
+    throw new Error("MAX_BATCH_CONCURRENCY debe ser un entero mayor o igual a 1");
+  }
+
+  if (!Number.isInteger(DEFAULT_BATCH_CONCURRENCY) || DEFAULT_BATCH_CONCURRENCY < 1) {
+    throw new Error("DEFAULT_BATCH_CONCURRENCY debe ser un entero mayor o igual a 1");
+  }
+
+  const requestedConcurrency = Number(payload.concurrency || DEFAULT_BATCH_CONCURRENCY);
+  if (!Number.isInteger(requestedConcurrency) || requestedConcurrency < 1) {
+    throw new Error("concurrency debe ser un entero mayor o igual a 1");
+  }
+
+  const concurrency = Math.min(requestedConcurrency, MAX_BATCH_CONCURRENCY);
+  if (requestedConcurrency > MAX_BATCH_CONCURRENCY) {
+    console.log(
+      `concurrency=${requestedConcurrency} excede MAX_BATCH_CONCURRENCY=${MAX_BATCH_CONCURRENCY}. Usando ${concurrency}.`
+    );
+  }
+
+  return normalizeClientList(payload.clientes, concurrency);
+}
+
+function normalizeClientList(clientes, concurrency) {
+  if (!Array.isArray(clientes) || clientes.length === 0) {
     throw new Error("El arreglo clientes es obligatorio y debe tener al menos un elemento");
   }
 
-  const concurrency = Number(payload.concurrency || 1);
   if (!Number.isInteger(concurrency) || concurrency < 1) {
     throw new Error("concurrency debe ser un entero mayor o igual a 1");
   }
 
   return {
-    clientes: payload.clientes.map((item) =>
+    clientes: clientes.map((item) =>
       item && typeof item === "object" && item.cliente ? item : { cliente: item }
     ),
     concurrency,
@@ -80,6 +104,14 @@ function callCetelemEndpoint({ port, payload }) {
 }
 
 async function processMassiveClients({ port, clientes, concurrency }) {
+  return processClientBatch({
+    clientes,
+    concurrency,
+    runClient: (payload) => callCetelemEndpoint({ port, payload }),
+  });
+}
+
+async function processClientBatch({ clientes, concurrency, runClient }) {
   const results = new Array(clientes.length);
   let nextIndex = 0;
 
@@ -95,7 +127,7 @@ async function processMassiveClients({ port, clientes, concurrency }) {
       const payload = clientes[currentIndex];
       const cliente = payload.cliente || {};
       const startedAt = new Date().toISOString();
-      const response = await callCetelemEndpoint({ port, payload });
+      const response = await runClient(payload);
       const finishedAt = new Date().toISOString();
 
       results[currentIndex] = {
@@ -133,5 +165,7 @@ async function processMassiveClients({ port, clientes, concurrency }) {
 
 module.exports = {
   normalizeBatchPayload,
+  normalizeClientList,
+  processClientBatch,
   processMassiveClients,
 };

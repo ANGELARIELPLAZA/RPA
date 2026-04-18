@@ -136,7 +136,7 @@ async function executeJob(taskId, payload) {
     updateJob(taskId, { status: "running", error: null });
 
     try {
-        const result = await runCetelemFlowWithRetries(payload);
+        const result = await runCetelemFlowWithRetries(payload, { taskId });
         updateJob(taskId, {
             status: "completed",
             result,

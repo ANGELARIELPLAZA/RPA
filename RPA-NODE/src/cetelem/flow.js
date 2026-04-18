@@ -197,6 +197,35 @@ async function createBrowserSession() {
     return { browser, context, page };
 }
 
+function buildTaskArtifactPath(taskId, suffix, extension) {
+    if (!taskId) {
+        return null;
+    }
+
+    const safeTaskId = String(taskId).replace(/[^a-f0-9-]/gi, "_");
+    return path.join(VIDEOS_DIR, `${safeTaskId}_${suffix}.${extension}`);
+}
+
+function moveArtifact(sourcePath, targetPath) {
+    if (!sourcePath || !targetPath || !fs.existsSync(sourcePath)) {
+        return null;
+    }
+
+    fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+
+    try {
+        if (fs.existsSync(targetPath)) {
+            fs.unlinkSync(targetPath);
+        }
+
+        fs.renameSync(sourcePath, targetPath);
+        return targetPath;
+    } catch {
+        fs.copyFileSync(sourcePath, targetPath);
+        return targetPath;
+    }
+}
+
 async function performLogin(page) {
     console.log("Abriendo login...");
     await page.goto(LOGIN_URL, { timeout: 30000 });
@@ -229,7 +258,8 @@ async function performLogin(page) {
     return popup;
 }
 
-async function runCetelemFlow(payload) {
+async function runCetelemFlow(payload, options = {}) {
+    const taskId = options.taskId || null;
     const timestamp = createTimestamp();
     const screenshotPath = path.join(SCREENSHOTS_DIR, `playwright_popup_${timestamp}.png`);
     const errorScreenshotPath = path.join(SCREENSHOTS_DIR, `playwright_error_${timestamp}.png`);
@@ -275,10 +305,6 @@ async function runCetelemFlow(payload) {
             screenshotPath,
             vehiclePriceTax,
             vehicleTotalAmount,
-            videoPaths: {
-                page: null,
-                popup: null,
-            },
         };
     } catch (error) {
         try {
@@ -337,18 +363,21 @@ async function runCetelemFlow(payload) {
         await context.close();
         await browser.close();
 
-        console.log(`Video page: ${pageVideo || "N/A"}`);
-        console.log(`Video popup: ${popupVideo || "N/A"}`);
+        const taskPageVideo = moveArtifact(pageVideo, buildTaskArtifactPath(taskId, "page", "webm"));
+        const taskPopupVideo = moveArtifact(popupVideo, buildTaskArtifactPath(taskId, "popup", "webm"));
+
+        console.log(`Video page: ${taskPageVideo || pageVideo || "N/A"}`);
+        console.log(`Video popup: ${taskPopupVideo || popupVideo || "N/A"}`);
     }
 }
 
-async function runCetelemFlowWithRetries(payload) {
+async function runCetelemFlowWithRetries(payload, options = {}) {
     let lastError;
 
     for (let attempt = 1; attempt <= MAX_REINTENTOS; attempt += 1) {
         try {
             console.log(`Intento ${attempt}/${MAX_REINTENTOS}`);
-            return await runCetelemFlow(payload);
+            return await runCetelemFlow(payload, options);
         } catch (error) {
             lastError = error;
             console.error(`ERROR en intento ${attempt}: ${error.message}`);

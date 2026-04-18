@@ -14,6 +14,8 @@ function createApiServer() {
           screenshotPath: result.screenshotPath,
           consolePath: result.consolePath,
           elapsedSeconds: result.elapsedSeconds,
+          executedFlows: result.executedFlows,
+          vehiclePriceTax: result.vehiclePriceTax,
           vehicleTotalAmount: result.vehicleTotalAmount,
         });
         return;

@@ -4,7 +4,8 @@
   "main": "main.js",
   "scripts": {
     "start": "node main.js",
-    "run": "node main.js run"
+    "run": "node main.js run",
+    "simulate:5": "node main.js simulate5"
   },
   "keywords": [],
   "author": "",

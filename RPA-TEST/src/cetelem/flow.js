@@ -1,5 +1,6 @@
 const fs = require("fs");
 const path = require("path");
+const { randomUUID } = require("crypto");
 const { chromium } = require("playwright");
 const {
   BAD_URL_TOKEN,
@@ -15,13 +16,31 @@ const {
   VIDEOS_DIR,
   assertCredentials,
 } = require("../config");
-const { fillClientData, fillVehicleData, readVehicleTotalAmount } = require("./form");
+const {
+  fillClientData,
+  fillCreditData,
+  fillVehicleData,
+  readVehiclePriceTax,
+  readVehicleTotalAmount,
+} = require("./form");
 
 const READY_TEXT_RAZON_SOCIAL =
   "capturar nombre de razon social como aparece en el registro del rfc o documentos oficiales";
 
+const DATA_FLOWS = {
+  cliente: fillClientData,
+  vehiculo: fillVehicleData,
+  credito: fillCreditData,
+};
+
 function createTimestamp() {
-  return new Date().toISOString().replace(/[-:]/g, "").replace(/\..+/, "").replace("T", "_");
+  const timestamp = new Date()
+    .toISOString()
+    .replace(/[-:]/g, "")
+    .replace(/\..+/, "")
+    .replace("T", "_");
+
+  return `${timestamp}_${randomUUID().slice(0, 8)}`;
 }
 
 function isDeadSession(url) {
@@ -238,6 +257,43 @@ async function performLogin(page) {
   return popup;
 }
 
+function normalizeRequestedDataFlows(payload) {
+  const requestedFlows = payload?.flujos || payload?.flows;
+  const nivelDetalle = payload?.NIVEL_DETALLE || payload?.nivelDetalle || payload?.nivel_detalle;
+
+  if (Array.isArray(requestedFlows) && requestedFlows.length > 0) {
+    return requestedFlows.map((flow) => String(flow).trim().toLowerCase()).filter(Boolean);
+  }
+
+  if (nivelDetalle) {
+    return [String(nivelDetalle).trim().toLowerCase()];
+  }
+
+  const presentFlows = Object.keys(DATA_FLOWS).filter((flow) => payload?.[flow] !== undefined);
+  return presentFlows.length > 0 ? presentFlows : ["cliente"];
+}
+
+async function runRequestedDataFlows(page, payload) {
+  const flows = normalizeRequestedDataFlows(payload);
+
+  for (const flow of flows) {
+    const fillFlow = DATA_FLOWS[flow];
+
+    if (!fillFlow) {
+      throw new Error(`Flujo no soportado: ${flow}`);
+    }
+
+    if (payload?.[flow] === undefined) {
+      throw new Error(`No viene el objeto ${flow} en el JSON`);
+    }
+
+    console.log(`Ejecutando flujo de datos: ${flow}`);
+    await fillFlow(page, payload);
+  }
+
+  return flows;
+}
+
 async function runCetelemFlow(payload) {
   const timestamp = createTimestamp();
   const screenshotPath = path.join(SCREENSHOTS_DIR, `playwright_popup_${timestamp}.png`);
@@ -264,9 +320,23 @@ async function runCetelemFlow(payload) {
     popup = await performLogin(page);
     popup.on("console", onConsole);
 
-    await fillClientData(popup, payload);
-    await fillVehicleData(popup, payload);
-    const vehicleTotalAmount = await readVehicleTotalAmount(popup);
+    const executedFlows = await runRequestedDataFlows(popup, payload);
+    let vehicleTotalAmount = null;
+    let vehiclePriceTax = null;
+
+    if (executedFlows.includes("vehiculo")) {
+      try {
+        vehiclePriceTax = await readVehiclePriceTax(popup);
+      } catch (error) {
+        console.log(`[WARN] No se pudo leer vehiclePriceTax: ${error.message}`);
+      }
+
+      try {
+        vehicleTotalAmount = await readVehicleTotalAmount(popup);
+      } catch (error) {
+        console.log(`[WARN] No se pudo leer vehicleTotalAmount: ${error.message}`);
+      }
+    }
 
     await prepareFullQuoteScreenshot(popup);
 
@@ -282,7 +352,9 @@ async function runCetelemFlow(payload) {
       elapsedSeconds: Number(((performance.now() - startTime) / 1000).toFixed(2)),
       screenshotBuffer,
       screenshotPath,
+      vehiclePriceTax,
       vehicleTotalAmount,
+      executedFlows,
       videoPaths: {
         page: null,
         popup: null,
@@ -366,6 +438,8 @@ async function runCetelemFlowWithRetries(payload) {
 }
 
 module.exports = {
+  normalizeRequestedDataFlows,
   runCetelemFlow,
   runCetelemFlowWithRetries,
+  runRequestedDataFlows,
 };

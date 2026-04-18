@@ -69,7 +69,6 @@ function serializeJob(job) {
                 screenshotPath: job.result.screenshotPath,
                 vehiclePriceTax: job.result.vehiclePriceTax || null,
                 vehicleTotalAmount: job.result.vehicleTotalAmount || null,
-                videoPaths: job.result.videoPaths,
             }
             : null,
     };

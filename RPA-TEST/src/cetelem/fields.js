@@ -140,7 +140,7 @@ const VEHICULO_FIELDS = [
     key: "vehiclePriceTax",
     selector: "#vehiclePriceTax",
     type: "input",
-    required: true,
+    required: false,
     timeout: 15000,
     retries: 3,
     transform: normalizeString,
@@ -219,8 +219,48 @@ const VEHICULO_FIELDS = [
   },
 ];
 
+const CREDITO_FIELDS = [
+  {
+    key: "creditDepositPercent",
+    selector: "#creditDepositPercent",
+    type: "input",
+    required: false,
+    timeout: 15000,
+    retries: 3,
+    transform: normalizeString,
+  },
+  {
+    key: "creditDepositAmount",
+    selector: "#creditDepositAmount",
+    type: "input",
+    required: false,
+    timeout: 15000,
+    retries: 3,
+    transform: normalizeString,
+  },
+  {
+    key: "creditDepositPlan",
+    selector: "#creditDepositPlan",
+    type: "select",
+    required: false,
+    timeout: 30000,
+    retries: 6,
+    transform: normalizeString,
+  },
+  {
+    key: "creditDepositTerm",
+    selector: "#creditDepositTerm",
+    type: "select",
+    required: false,
+    timeout: 30000,
+    retries: 6,
+    transform: normalizeString,
+  },
+];
+
 module.exports = {
   CLIENTE_BASE_FIELDS,
   CLIENTE_FIELDS_BY_TYPE,
+  CREDITO_FIELDS,
   VEHICULO_FIELDS,
 };
