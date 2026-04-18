@@ -15,7 +15,7 @@ const {
   VIDEOS_DIR,
   assertCredentials,
 } = require("../config");
-const { fillClientData } = require("./form");
+const { fillClientData, fillVehicleData, readVehicleTotalAmount } = require("./form");
 
 const READY_TEXT_RAZON_SOCIAL =
   "capturar nombre de razon social como aparece en el registro del rfc o documentos oficiales";
@@ -213,6 +213,8 @@ async function runCetelemFlow(payload) {
     popup.on("console", onConsole);
 
     await fillClientData(popup, payload);
+    await fillVehicleData(popup, payload);
+    const vehicleTotalAmount = await readVehicleTotalAmount(popup);
 
     const screenshotBuffer = await popup.screenshot({ path: screenshotPath, type: "png" });
     fs.writeFileSync(consolePath, consoleLogs.join("\n"), "utf8");
@@ -222,6 +224,7 @@ async function runCetelemFlow(payload) {
       elapsedSeconds: Number(((performance.now() - startTime) / 1000).toFixed(2)),
       screenshotBuffer,
       screenshotPath,
+      vehicleTotalAmount,
       videoPaths: {
         page: null,
         popup: null,

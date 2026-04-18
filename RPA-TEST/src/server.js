@@ -9,15 +9,13 @@ function createApiServer() {
       if (request.method === "POST" && request.url === "/cetelem-cotizar-async") {
         const payload = await readJsonBody(request);
         const result = await runCetelemFlowWithRetries(payload);
-
-        response.writeHead(200, {
-          "Content-Type": "image/png",
-          "Content-Length": Buffer.byteLength(result.screenshotBuffer),
-          "X-Screenshot-Path": result.screenshotPath,
-          "X-Console-Path": result.consolePath,
-          "X-Elapsed-Seconds": String(result.elapsedSeconds),
+        sendJson(response, 200, {
+          screenshotRaw: result.screenshotBuffer.toString("base64"),
+          screenshotPath: result.screenshotPath,
+          consolePath: result.consolePath,
+          elapsedSeconds: result.elapsedSeconds,
+          vehicleTotalAmount: result.vehicleTotalAmount,
         });
-        response.end(result.screenshotBuffer);
         return;
       }
 

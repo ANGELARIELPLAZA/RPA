@@ -40,6 +40,10 @@ const DEFAULT_CLIENT_PAYLOAD = {
     customerNumUnidades: "2",
     customerFirstCredit: "1",
   },
+  vehiculo: {
+    vehicleType: "N",
+    insuranceVehicleUse: "1",
+  },
 };
 
 function assertCredentials() {

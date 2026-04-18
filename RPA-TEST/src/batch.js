@@ -15,7 +15,9 @@ function normalizeBatchPayload(payload) {
   }
 
   return {
-    clientes: payload.clientes.map((cliente) => ({ cliente })),
+    clientes: payload.clientes.map((item) =>
+      item && typeof item === "object" && item.cliente ? item : { cliente: item }
+    ),
     concurrency,
   };
 }
@@ -40,13 +42,13 @@ function callCetelemEndpoint({ port, payload }) {
         response.on("end", () => {
           const rawBody = Buffer.concat(chunks);
           const contentType = response.headers["content-type"] || "";
-          let parsedError = null;
+          let parsedJson = null;
 
           if (typeof contentType === "string" && contentType.includes("application/json")) {
             try {
-              parsedError = JSON.parse(rawBody.toString("utf8"));
+              parsedJson = JSON.parse(rawBody.toString("utf8"));
             } catch {
-              parsedError = { error: rawBody.toString("utf8") };
+              parsedJson = { error: rawBody.toString("utf8") };
             }
           }
 
@@ -55,7 +57,8 @@ function callCetelemEndpoint({ port, payload }) {
             statusCode: response.statusCode,
             headers: response.headers,
             bodyLength: rawBody.length,
-            error: parsedError?.error || null,
+            data: parsedJson,
+            error: parsedJson?.error || null,
           });
         });
       }
@@ -103,11 +106,11 @@ async function processMassiveClients({ port, clientes, concurrency }) {
         statusCode: response.statusCode,
         customerRfc: cliente.customerRfc || null,
         customerName: cliente.customerName || cliente.customerRazonSocial || null,
-        screenshotPath: response.headers["x-screenshot-path"] || null,
-        consolePath: response.headers["x-console-path"] || null,
-        elapsedSeconds: response.headers["x-elapsed-seconds"]
-          ? Number(response.headers["x-elapsed-seconds"])
-          : null,
+        elapsedSeconds: response.data?.elapsedSeconds ?? null,
+        vehicleTotalAmount: response.data?.vehicleTotalAmount ?? null,
+        screenshotPath: response.data?.screenshotPath || null,
+        consolePath: response.data?.consolePath || null,
+        screenshotRawBytes: response.data?.screenshotRaw ? response.data.screenshotRaw.length : 0,
         responseBytes: response.bodyLength,
         error: response.error,
       };
