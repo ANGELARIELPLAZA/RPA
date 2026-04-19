@@ -35,6 +35,7 @@ const ACTIVE_POPUP_SESSION_TEXT = "su sesión se encuentra activa en una ventana
 const POPUP_TIMEOUT_MS = 15000;
 const SESSION_LOAD_WAIT_MS = 6000;
 const REOPEN_POPUP_SELECTOR = "#btnReopen";
+const pageNavigationLocks = new WeakMap();
 
 const DATA_FLOWS = {
     cliente: fillClientData,
@@ -74,6 +75,40 @@ function validateSession(pageOrPopup) {
     }
 }
 
+async function runExclusivePageNavigation(page, label, action) {
+    if (!page || page.isClosed()) {
+        throw new Error(`No se puede navegar ${label}: page cerrada.`);
+    }
+
+    const previous = pageNavigationLocks.get(page) || Promise.resolve();
+    const current = previous.catch(() => {}).then(async () => {
+        logger.debug(`[nav:${label}] inicio url=${getPageUrl(page) || "N/A"}`);
+        const result = await action();
+        logger.debug(`[nav:${label}] fin url=${getPageUrl(page) || "N/A"}`);
+        return result;
+    });
+
+    const tracked = current.finally(() => {
+        if (pageNavigationLocks.get(page) === tracked) {
+            pageNavigationLocks.delete(page);
+        }
+    });
+
+    pageNavigationLocks.set(page, tracked);
+
+    return current;
+}
+
+async function gotoAndSettle(page, url, label, timeout = 30000) {
+    return runExclusivePageNavigation(page, label, async () => {
+        await page.goto(url, { waitUntil: "domcontentloaded", timeout });
+        await waitForPageSettled(page, timeout).catch((error) => {
+            logger.warn(`[nav:${label}] pagina no quedo en networkidle: ${error.message}`);
+        });
+        return page;
+    });
+}
+
 function registerDialogHandler(pageOrPopup) {
     pageOrPopup.on("dialog", async (dialog) => {
         const message = dialog.message() || "";
@@ -100,6 +135,39 @@ async function getLowerBodyText(pageOrPopup, timeout = 2000) {
     } catch {
         return "";
     }
+}
+
+function classifySessionUrl(url) {
+    if (!url) {
+        return "sin_url";
+    }
+
+    if (isDeadSession(url)) {
+        return "dead_josso";
+    }
+
+    if (url.includes("cotizador")) {
+        return "cotizador";
+    }
+
+    if (url.includes("/login") || url.includes("cck/login") || url.includes("auth/kia/login")) {
+        return "login";
+    }
+
+    return "desconocido";
+}
+
+async function logSessionState(pageOrPopup, label, cause = "") {
+    const url = getPageUrl(pageOrPopup);
+    const body = pageOrPopup && !pageOrPopup.isClosed?.()
+        ? await getLowerBodyText(pageOrPopup, 1000)
+        : "";
+    const state = body.includes(ACTIVE_POPUP_SESSION_TEXT)
+        ? "sessionActive_popup"
+        : classifySessionUrl(url);
+
+    logger.warn(`[session:${label}] state=${state} url=${url || "N/A"} cause=${cause || "N/A"}`);
+    return { state, url };
 }
 
 async function detectActivePopupSession(page) {
@@ -132,7 +200,7 @@ async function recreatePageFrom(page, fallbackUrl, reason) {
         throw new Error(`No se pudo recrear page: context no disponible. Motivo: ${reason}`);
     }
 
-    logger.warn(`Recreando page despues de fallo de navegacion: ${reason}`);
+    logger.warn(`Recreando page despues de fallo de navegacion: ${reason}. targetUrl=${targetUrl || "N/A"}`);
 
     if (page && !page.isClosed()) {
         await page.close().catch(() => {});
@@ -142,8 +210,7 @@ async function recreatePageFrom(page, fallbackUrl, reason) {
         const nextPage = await context.newPage();
 
         if (targetUrl) {
-            await nextPage.goto(targetUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
-            await waitForPageSettled(nextPage, 30000).catch(() => {});
+            await gotoAndSettle(nextPage, targetUrl, "recreate-page", 30000);
         }
 
         return nextPage;
@@ -155,8 +222,7 @@ async function recreatePageFrom(page, fallbackUrl, reason) {
             const nextPage = await nextContext.newPage();
 
             if (targetUrl) {
-                await nextPage.goto(targetUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
-                await waitForPageSettled(nextPage, 30000).catch(() => {});
+                await gotoAndSettle(nextPage, targetUrl, "recreate-page-browser-restart", 30000);
             }
 
             return nextPage;
@@ -189,9 +255,8 @@ async function resilientRefreshPage(page, {
                 throw new Error(`No hay URL disponible para refrescar ${label}.`);
             }
 
-            logger.debug(`Refrescando ${label} con goto resiliente. Intento ${attempt}/${attempts}.`);
-            await currentPage.goto(currentUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
-            await waitForPageSettled(currentPage, 30000);
+            logger.debug(`Refrescando ${label} con navegacion resiliente. Intento ${attempt}/${attempts}.`);
+            await gotoAndSettle(currentPage, currentUrl, `refresh-${label}`, 30000);
             return currentPage;
         } catch (error) {
             lastError = error;
@@ -459,17 +524,22 @@ async function performLogin(page) {
     let loginPage = page;
 
     logger.debug("Abriendo login...");
-    await loginPage.goto(LOGIN_URL, { timeout: 30000 });
+    await gotoAndSettle(loginPage, LOGIN_URL, "login-open", 30000);
+    await logSessionState(loginPage, "login-open", "login inicial cargado");
     validateSession(loginPage);
 
     logger.debug("Ingresando usuario...");
+    await loginPage.waitForSelector('input[name="userName"]', { state: "visible", timeout: 20000 });
     await loginPage.fill('input[name="userName"]', USUARIO);
 
     logger.debug("Click primer ingresar...");
     await loginPage.locator("#btnEntrar").click();
+    await loginPage.waitForLoadState("domcontentloaded", { timeout: 15000 }).catch(() => {});
+    await logSessionState(loginPage, "login-user", "usuario enviado");
     validateSession(loginPage);
 
     logger.debug("Ingresando password...");
+    await loginPage.waitForSelector('input[name="userPassword"]', { state: "visible", timeout: 20000 });
     await loginPage.fill('input[name="userPassword"]', PASSWORD);
 
     logger.debug("Click segundo ingresar y esperando popup...");
@@ -493,13 +563,11 @@ async function waitForQuotePopupAfterPassword(page) {
     const pagePromise = context.waitForEvent("page", { timeout: POPUP_TIMEOUT_MS }).catch(() => null);
 
     await page.locator("#btnEntrar").click();
+    await logSessionState(page, "login-password-click", "password enviado");
     logger.debug(`Esperando ${SESSION_LOAD_WAIT_MS}ms a que cargue la sesion...`);
-    await page.waitForTimeout(SESSION_LOAD_WAIT_MS);
-    logger.debug("Refrescando pagina despues de iniciar sesion...");
-    const loginPage = await resilientRefreshPage(page, {
-        label: "login despues de iniciar sesion",
-        fallbackUrl: LOGIN_URL,
-    });
+    await page.waitForLoadState("domcontentloaded", { timeout: SESSION_LOAD_WAIT_MS }).catch(() => {});
+    await page.waitForTimeout(1000);
+    const loginPage = page;
     context = loginPage.context();
 
     const popup = await Promise.race([
@@ -509,16 +577,19 @@ async function waitForQuotePopupAfterPassword(page) {
     ]);
 
     if (popup) {
+        await logSessionState(popup, "quote-popup", "popup detectado despues de password");
         return popup;
     }
 
     const quotePage = findAvailableQuotePage(context, loginPage, pagesBeforeClick);
 
     if (quotePage) {
+        await logSessionState(quotePage, "quote-page", "pagina cotizador ya disponible");
         return quotePage;
     }
 
     if (await detectActivePopupSession(loginPage)) {
+        await logSessionState(loginPage, "session-active", "portal reporta sesion activa en popup");
         return reopenQuotePopup(loginPage, pagesBeforeClick);
     }
 
@@ -527,6 +598,7 @@ async function waitForQuotePopupAfterPassword(page) {
     const openedPopup = await openQuotePopupIfAvailable(loginPage, pagesBeforeClick);
 
     if (openedPopup) {
+        await logSessionState(openedPopup, "quote-opened", "popup abierto por recovery local");
         return openedPopup;
     }
 
@@ -551,6 +623,7 @@ async function reopenQuotePopup(page, pagesBeforeClick) {
     const context = page.context();
 
     logger.warn("Sesion activa en ventana emergente. Reabriendo popup con btnReopen.");
+    await logSessionState(page, "reopen-popup", "sessionActive requiere btnReopen");
 
     try {
         await page.locator(REOPEN_POPUP_SELECTOR).waitFor({ state: "visible", timeout: 5000 });
@@ -571,12 +644,14 @@ async function reopenQuotePopup(page, pagesBeforeClick) {
     ]);
 
     if (popup) {
+        await logSessionState(popup, "reopen-popup-ok", "btnReopen abrio popup");
         return popup;
     }
 
     const existingPopup = findAvailableQuotePage(context, page, pagesBeforeClick);
 
     if (existingPopup) {
+        await logSessionState(existingPopup, "reopen-existing-popup", "btnReopen no emitio popup pero existe cotizador");
         return existingPopup;
     }
 
@@ -621,6 +696,7 @@ async function openQuotePopupIfAvailable(page, pagesBeforeClick) {
 
     if (canReopen) {
         logger.warn("Boton btnReopen disponible. Abriendo popup de cotizador.");
+        await logSessionState(page, "open-quote-reopen", "btnReopen visible");
 
         const popupPromise = page.waitForEvent("popup", { timeout: POPUP_TIMEOUT_MS }).catch(() => null);
         const pagePromise = context.waitForEvent("page", { timeout: POPUP_TIMEOUT_MS }).catch(() => null);
@@ -640,6 +716,7 @@ async function openQuotePopupIfAvailable(page, pagesBeforeClick) {
 
     if (canRetryEnter) {
         logger.warn("Boton de ingreso disponible. Reintentando abrir popup de cotizador.");
+        await logSessionState(page, "open-quote-enter", "btnEntrar visible despues de login");
 
         const popupPromise = page.waitForEvent("popup", { timeout: POPUP_TIMEOUT_MS }).catch(() => null);
         const pagePromise = context.waitForEvent("page", { timeout: POPUP_TIMEOUT_MS }).catch(() => null);
@@ -844,6 +921,9 @@ async function runCetelemFlowInContext({
             vehicleTotalAmount,
         };
     } catch (error) {
+        const target = popup || page;
+        await logSessionState(target, "task-failed", error.message).catch(() => {});
+
         if (isBrowserClosedError(error)) {
             await BrowserManager.restart();
         }
@@ -852,7 +932,6 @@ async function runCetelemFlowInContext({
         error.consolePath = consolePath;
 
         try {
-            const target = popup || page;
             if (!target) {
                 throw new Error("No hay page disponible para screenshot de error");
             }
@@ -902,7 +981,7 @@ async function runCetelemFlowInContext({
 
         try {
             if (popup) {
-                await closeQuoteSession(popup);
+                logger.debug("Cerrando popup sin buttonClose; recovery usa cierre de page/context.");
                 await popup.close();
             }
         } catch {
@@ -911,6 +990,7 @@ async function runCetelemFlowInContext({
 
         try {
             if (page) {
+                logger.debug("Cerrando login page sin logout UI.");
                 await page.close();
             }
         } catch {
@@ -919,6 +999,7 @@ async function runCetelemFlowInContext({
 
         try {
             if (context) {
+                logger.debug(`[task:${taskId || "cli"}] Cerrando contexto Playwright completo.`);
                 await context.close();
             }
         } catch (error) {
@@ -941,18 +1022,19 @@ async function runCetelemFlowWithRetries(payload, options = {}) {
 
     for (let attempt = 1; attempt <= MAX_REINTENTOS; attempt += 1) {
         try {
-            logger.debug(`[task ${shortTaskId(options.taskId)}] attempt ${attempt}/${MAX_REINTENTOS}`);
+            logger.debug(`[task ${shortTaskId(options.taskId)}] attempt ${attempt}/${MAX_REINTENTOS} recovery=clean_context_per_attempt`);
             return await runCetelemFlow(payload, options);
         } catch (error) {
             lastError = error;
-            logger.warn(`[task ${shortTaskId(options.taskId)}] attempt=${attempt}/${MAX_REINTENTOS} error="${error.message}"`);
+            const retryable = error.retryable !== false;
+            logger.warn(`[task ${shortTaskId(options.taskId)}] recovery cause="${error.message}" attempt=${attempt}/${MAX_REINTENTOS} retryable=${retryable} action=context_closed_and_recreated_on_next_attempt`);
 
             if (error.retryable === false) {
                 break;
             }
 
             if (attempt < MAX_REINTENTOS) {
-                logger.debug(`[task ${shortTaskId(options.taskId)}] retrying`);
+                logger.debug(`[task ${shortTaskId(options.taskId)}] reintentando con browser context limpio`);
             }
         }
     }

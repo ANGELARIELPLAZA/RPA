@@ -68,7 +68,7 @@ const VEHICULO_FIELDS = [
     { key: "vehicleAccesories", selector: "#vehicleAccesories", type: "input", required: false, timeout: 15000, retries: 3, transform: normalizeUppercase },
     { key: "vehicleIsConverted", selector: "#vehicleIsConverted", type: "checkbox", required: false, timeout: 10000, retries: 3, transform: normalizeCheckbox },
     { key: "vehicleAccesoriesAmount", selector: "#vehicleAccesoriesAmount", type: "input", required: false, timeout: 15000, retries: 3, transform: normalizeString },
-    { key: "vehicleChargeStationAmount", selector: "#vehicleChargeStationAmount", type: "input", required: false, timeout: 15000, retries: 3, transform: normalizeString },
+    { key: "vehicleChargeStationAmount", selector: "#vehicleChargeStationAmount", type: "input", required: false, timeout: 15000, retries: 3, transform: normalizeString, skipIfHidden: true },
     { key: "vehicleExtendedWarrantyOption", radioName: "vehicleExtendedWarrantyOption", type: "radio", required: false, timeout: 10000, retries: 3, transform: normalizeString },
     { key: "gapInsurance", radioName: "gapInsurance", type: "radio", required: false, timeout: 10000, retries: 3, transform: normalizeUppercase },
     { key: "gapInsurancePlan", selector: "#gapInsurancePlan", type: "select", required: false, timeout: 20000, retries: 5, transform: normalizeString },

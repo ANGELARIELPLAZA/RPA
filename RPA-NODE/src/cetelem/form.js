@@ -228,6 +228,16 @@ async function fillAndVerify(page, selector, value, options = {}) {
     throw new Error(`No se pudo llenar ${fieldName}=${expectedValue}. Ultimo error: ${lastError?.message || "desconocido"}`);
 }
 
+async function isFieldVisible(page, selector, timeout = 1500) {
+    try {
+        const locator = page.locator(selector).first();
+        await locator.waitFor({ state: "attached", timeout });
+        return await locator.isVisible();
+    } catch {
+        return false;
+    }
+}
+
 async function applyFieldSet(page, source, fields) {
     for (const field of fields) {
         const rawValue = getNestedValue(source, field.key);
@@ -255,6 +265,12 @@ async function applyFieldSet(page, source, fields) {
 
         if (field.type === "input") {
             const selector = await resolveFieldSelector(page, field);
+
+            if (field.skipIfHidden && !(await isFieldVisible(page, selector, 2000))) {
+                logger.warn(`Campo ${field.key} omitido porque existe oculto o no visible. selector=${selector}`);
+                continue;
+            }
+
             await fillAndVerify(page, selector, value, {
                 fieldName: field.key,
                 retries: field.retries,
