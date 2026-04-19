@@ -384,21 +384,25 @@ async function waitForQuotePopupAfterPassword(page) {
         return popup;
     }
 
-    const existingPopup = context.pages().find((candidate) => (
-        candidate !== page
-        && !pagesBeforeClick.has(candidate)
-        && !candidate.isClosed()
-    ));
+    const quotePage = findAvailableQuotePage(context, page, pagesBeforeClick);
 
-    if (existingPopup) {
-        return existingPopup;
+    if (quotePage) {
+        return quotePage;
     }
 
     if (await detectActivePopupSession(page)) {
         return reopenQuotePopup(page, pagesBeforeClick);
     }
 
-    throw new Error(`No se abrio popup de cotizador en ${POPUP_TIMEOUT_MS}ms.`);
+    logger.warn(`No se abrio popup de cotizador en ${POPUP_TIMEOUT_MS}ms. Intentando abrirlo sin marcar error.`);
+
+    const openedPopup = await openQuotePopupIfAvailable(page, pagesBeforeClick);
+
+    if (openedPopup) {
+        return openedPopup;
+    }
+
+    throw new Error("No se encontro una pagina de cotizador abierta despues de intentar abrir el popup.");
 }
 
 async function waitForActivePopupMessage(page) {
@@ -442,11 +446,7 @@ async function reopenQuotePopup(page, pagesBeforeClick) {
         return popup;
     }
 
-    const existingPopup = context.pages().find((candidate) => (
-        candidate !== page
-        && !pagesBeforeClick.has(candidate)
-        && !candidate.isClosed()
-    ));
+    const existingPopup = findAvailableQuotePage(context, page, pagesBeforeClick);
 
     if (existingPopup) {
         return existingPopup;
@@ -455,6 +455,91 @@ async function reopenQuotePopup(page, pagesBeforeClick) {
     throw createNonRetryableError(
         "Sesion activa en ventana emergente detectada, pero btnReopen no abrio el cotizador."
     );
+}
+
+function findAvailableQuotePage(context, page, pagesBeforeClick) {
+    const pages = context.pages();
+    const newPopup = pages.find((candidate) => (
+        candidate !== page
+        && (!pagesBeforeClick || !pagesBeforeClick.has(candidate))
+        && !candidate.isClosed()
+    ));
+
+    if (newPopup) {
+        return newPopup;
+    }
+
+    const quotePopup = pages.find((candidate) => (
+        candidate !== page
+        && !candidate.isClosed()
+        && candidate.url().includes("cotizador")
+    ));
+
+    if (quotePopup) {
+        return quotePopup;
+    }
+
+    if (!page.isClosed() && page.url().includes("cotizador")) {
+        return page;
+    }
+
+    return null;
+}
+
+async function openQuotePopupIfAvailable(page, pagesBeforeClick) {
+    const context = page.context();
+    const reopenButton = page.locator(REOPEN_POPUP_SELECTOR).first();
+    const canReopen = await reopenButton.isVisible({ timeout: 3000 }).catch(() => false);
+
+    if (canReopen) {
+        logger.warn("Boton btnReopen disponible. Abriendo popup de cotizador.");
+
+        const popupPromise = page.waitForEvent("popup", { timeout: POPUP_TIMEOUT_MS }).catch(() => null);
+        const pagePromise = context.waitForEvent("page", { timeout: POPUP_TIMEOUT_MS }).catch(() => null);
+
+        await reopenButton.click({ timeout: 5000 });
+
+        const popup = await Promise.race([
+            popupPromise,
+            pagePromise,
+        ]);
+
+        return popup || findAvailableQuotePage(context, page, pagesBeforeClick);
+    }
+
+    const enterButton = page.locator("#btnEntrar").first();
+    const canRetryEnter = await enterButton.isVisible({ timeout: 3000 }).catch(() => false);
+
+    if (canRetryEnter) {
+        logger.warn("Boton de ingreso disponible. Reintentando abrir popup de cotizador.");
+
+        const popupPromise = page.waitForEvent("popup", { timeout: POPUP_TIMEOUT_MS }).catch(() => null);
+        const pagePromise = context.waitForEvent("page", { timeout: POPUP_TIMEOUT_MS }).catch(() => null);
+
+        await enterButton.click({ timeout: 5000 });
+
+        const popup = await Promise.race([
+            popupPromise,
+            pagePromise,
+            waitForActivePopupMessage(page),
+        ]);
+
+        if (popup) {
+            return popup;
+        }
+
+        if (await detectActivePopupSession(page)) {
+            return reopenQuotePopup(page, pagesBeforeClick);
+        }
+
+        return findAvailableQuotePage(context, page, pagesBeforeClick);
+    }
+
+    if (page.url().includes("cotizador")) {
+        return page;
+    }
+
+    return null;
 }
 
 function elapsedSecondsSince(startTime) {
