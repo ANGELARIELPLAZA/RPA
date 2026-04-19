@@ -32,6 +32,7 @@ const READY_TEXT_RAZON_SOCIAL = "capturar nombre de razon social como aparece en
 const SYSTEMA_EXPERTO_ERROR_TEXT = "Error obteniendo variables para Systema Experto";
 const ACTIVE_POPUP_SESSION_TEXT = "su sesión se encuentra activa en una ventana emergente";
 const POPUP_TIMEOUT_MS = 15000;
+const SESSION_LOAD_WAIT_MS = 6000;
 const REOPEN_POPUP_SELECTOR = "#btnReopen";
 
 const DATA_FLOWS = {
@@ -373,6 +374,8 @@ async function waitForQuotePopupAfterPassword(page) {
     const pagePromise = context.waitForEvent("page", { timeout: POPUP_TIMEOUT_MS }).catch(() => null);
 
     await page.locator("#btnEntrar").click();
+    logger.debug(`Esperando ${SESSION_LOAD_WAIT_MS}ms a que cargue la sesion...`);
+    await page.waitForTimeout(SESSION_LOAD_WAIT_MS);
 
     const popup = await Promise.race([
         popupPromise,
