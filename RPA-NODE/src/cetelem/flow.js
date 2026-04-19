@@ -39,6 +39,11 @@ const pageNavigationLocks = new WeakMap();
 const STEP_LOG_WARN_EVERY_MS = 8000;
 const STEP_TIMEOUT_DEFAULT_MS = 45000;
 const VALIDATION_LOCATOR_TIMEOUT_MS = 2500;
+const BAD_GATEWAY_TOKEN = "bad gateway";
+const BAD_GATEWAY_STATUS_TOKEN = "502";
+const NGINX_TOKEN = "nginx";
+const BAD_GATEWAY_SCREENSHOT_COOLDOWN_MS = 30000;
+const diagnosticScreenshotCooldowns = new WeakMap();
 
 const DATA_FLOWS = {
     cliente: fillClientData,
@@ -182,7 +187,16 @@ async function runExclusivePageNavigation(page, label, action) {
 
 async function gotoAndSettle(page, url, label, timeout = 30000) {
     return runExclusivePageNavigation(page, label, async () => {
-        await page.goto(url, { waitUntil: "domcontentloaded", timeout });
+        const response = await page.goto(url, { waitUntil: "domcontentloaded", timeout });
+        const status = response?.status?.();
+
+        if (status === 502) {
+            logger.warn(`[nav:${label}] portal devolvio 502 Bad Gateway`, { url });
+            await captureDiagnosticScreenshot(page, "bad_gateway").catch(() => {});
+        } else if (status && status >= 500) {
+            logger.warn(`[nav:${label}] portal devolvio error ${status}`, { url });
+        }
+
         await waitForPageSettled(page, timeout).catch((error) => {
             logger.warn(`[nav:${label}] pagina no quedo en networkidle: ${error.message}`);
         });
@@ -223,6 +237,57 @@ async function getNormalizedBodyText(pageOrPopup, timeout = 2000) {
         return normalizeForMatch(await pageOrPopup.locator("body").innerText({ timeout }));
     } catch {
         return "";
+    }
+}
+
+function isBadGatewayBody(normalizedBody) {
+    const body = String(normalizedBody || "");
+    if (!body) {
+        return false;
+    }
+
+    const hasBadGateway = body.includes(BAD_GATEWAY_TOKEN);
+    const hasNginx = body.includes(NGINX_TOKEN);
+    const has502 = body.includes(`${BAD_GATEWAY_STATUS_TOKEN} ${BAD_GATEWAY_TOKEN}`) || body.includes(BAD_GATEWAY_STATUS_TOKEN);
+
+    return hasBadGateway && (hasNginx || has502);
+}
+
+async function captureDiagnosticScreenshot(pageOrPopup, suffix) {
+    if (!pageOrPopup || pageOrPopup.isClosed?.()) {
+        return null;
+    }
+
+    const cooldownKey = pageOrPopup;
+    const now = Date.now();
+    const last = diagnosticScreenshotCooldowns.get(cooldownKey) || 0;
+
+    if (now - last < BAD_GATEWAY_SCREENSHOT_COOLDOWN_MS) {
+        return null;
+    }
+
+    diagnosticScreenshotCooldowns.set(cooldownKey, now);
+
+    try {
+        const timestamp = createTimestamp();
+        const fileName = `playwright_${suffix}_${timestamp}.png`;
+        const fullPath = path.join(SCREENSHOTS_DIR, fileName);
+
+        await pageOrPopup.screenshot({
+            path: fullPath,
+            type: "png",
+            fullPage: true,
+        });
+
+        logger.warn(`[diag] screenshot ${suffix}: /screenshots/${fileName}`, {
+            path: fullPath,
+            url: getPageUrl(pageOrPopup) || "N/A",
+        });
+
+        return fullPath;
+    } catch (error) {
+        logger.warn(`[diag] no se pudo tomar screenshot ${suffix}: ${error.message}`);
+        return null;
     }
 }
 
@@ -336,9 +401,11 @@ async function logSessionState(pageOrPopup, label, cause = "") {
     const body = pageOrPopup && !pageOrPopup.isClosed?.()
         ? await getNormalizedBodyText(pageOrPopup, 1000)
         : "";
-    const state = body.includes(normalizeForMatch(ACTIVE_POPUP_SESSION_TEXT))
-        ? "sessionActive_popup"
-        : classifySessionUrl(url);
+    const state = isBadGatewayBody(body)
+        ? "bad_gateway_502"
+        : body.includes(normalizeForMatch(ACTIVE_POPUP_SESSION_TEXT))
+            ? "sessionActive_popup"
+            : classifySessionUrl(url);
 
     logger.warn(`[session:${label}] state=${state} url=${url || "N/A"} cause=${cause || "N/A"}`);
     return { state, url };
@@ -523,6 +590,12 @@ async function waitForValidQuoteScreen(popup, timeout = 45000) {
                 const body = await getLowerBodyText(currentPopup, 2000);
                 if (!body) {
                     failures.push("body");
+                }
+
+                const normalizedBody = await getNormalizedBodyText(currentPopup, 1500);
+                if (isBadGatewayBody(normalizedBody)) {
+                    failures.push("bad_gateway_502");
+                    await captureDiagnosticScreenshot(currentPopup, "bad_gateway").catch(() => {});
                 }
 
                 const overlay = await detectBlockingOverlay(currentPopup);
