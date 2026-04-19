@@ -376,6 +376,8 @@ async function waitForQuotePopupAfterPassword(page) {
     await page.locator("#btnEntrar").click();
     logger.debug(`Esperando ${SESSION_LOAD_WAIT_MS}ms a que cargue la sesion...`);
     await page.waitForTimeout(SESSION_LOAD_WAIT_MS);
+    logger.debug("Recargando pagina despues de iniciar sesion...");
+    await page.reload({ waitUntil: "domcontentloaded", timeout: 30000 });
 
     const popup = await Promise.race([
         popupPromise,
