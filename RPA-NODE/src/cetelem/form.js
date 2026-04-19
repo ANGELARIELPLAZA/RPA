@@ -1,4 +1,5 @@
 const { CLIENTE_BASE_FIELDS, CLIENTE_FIELDS_BY_TYPE, CREDITO_FIELDS, SEGURO_FIELDS, VEHICULO_FIELDS } = require("./fields");
+const logger = require("../core/logger");
 
 const INSURANCE_CARRIER_ALIASES = {
     CHUBB: "ABA",
@@ -152,7 +153,7 @@ async function selectAndVerify(page, selector, value, options = {}) {
             return;
         } catch (error) {
             lastError = error;
-            console.log(`[WARN] ${fieldName} intento ${attempt}/${retries}: ${error.message}`);
+            logger.debug(`${fieldName} intento ${attempt}/${retries}: ${error.message}`);
 
             if (attempt < retries) {
                 await page.waitForTimeout(500);
@@ -216,7 +217,7 @@ async function fillAndVerify(page, selector, value, options = {}) {
             return;
         } catch (error) {
             lastError = error;
-            console.log(`[WARN] ${fieldName} intento ${attempt}/${retries}: ${error.message}`);
+            logger.debug(`${fieldName} intento ${attempt}/${retries}: ${error.message}`);
 
             if (attempt < retries) {
                 await page.waitForTimeout(700);
@@ -321,7 +322,7 @@ async function setCheckboxValue(page, selector, value, options = {}) {
             return;
         } catch (error) {
             lastError = error;
-            console.log(`[WARN] ${fieldName} intento ${attempt}/${retries}: ${error.message}`);
+            logger.debug(`${fieldName} intento ${attempt}/${retries}: ${error.message}`);
 
             if (attempt < retries) {
                 await page.waitForTimeout(500);
@@ -359,7 +360,7 @@ async function setRadioValue(page, radioName, value, options = {}) {
             return;
         } catch (error) {
             lastError = error;
-            console.log(`[WARN] ${fieldName} intento ${attempt}/${retries}: ${error.message}`);
+            logger.debug(`${fieldName} intento ${attempt}/${retries}: ${error.message}`);
 
             if (attempt < retries) {
                 await page.waitForTimeout(500);
@@ -435,7 +436,7 @@ async function fillCreditData(page, payload) {
         return true;
     });
 
-    console.log(`Campos de credito a llenar: ${fields.map((field) => field.key).join(", ") || "ninguno"}`);
+    logger.debug(`Campos de credito a llenar: ${fields.map((field) => field.key).join(", ") || "ninguno"}`);
     await applyFieldSet(page, credito, fields);
     await assertNoCreditDepositMinimumError(page);
 }
@@ -560,13 +561,13 @@ async function refreshInsuranceQuotes(page) {
         }).catch(() => false);
 
         if (refreshed) {
-            console.log(`Recargando tabla de aseguradoras con ${selector}`);
+            logger.debug(`Recargando tabla de aseguradoras con ${selector}`);
             await page.waitForTimeout(2500);
             return;
         }
     }
 
-    console.log("[WARN] No se encontro combo disponible para recargar aseguradoras.");
+    logger.warn("No se encontro combo disponible para recargar aseguradoras.");
 }
 
 async function selectInsuranceOption(page, requestedCarrier) {
@@ -580,7 +581,7 @@ async function selectInsuranceOption(page, requestedCarrier) {
             break;
         }
 
-        console.log(`[WARN] Tabla de aseguradoras sin datos validos intento ${attempt}/3.`);
+        logger.debug(`Tabla de aseguradoras sin datos validos intento ${attempt}/3.`);
         if (attempt < 3) {
             await refreshInsuranceQuotes(page);
         }
@@ -603,7 +604,7 @@ async function selectInsuranceOption(page, requestedCarrier) {
     await page.locator(radioSelector).check({ timeout: 10000 });
     await page.waitForTimeout(1000);
 
-    console.log(`Aseguradora seleccionada: ${selectedQuote.carrier} ${selectedQuote.rawAmount}`);
+    logger.debug(`Aseguradora seleccionada: ${selectedQuote.carrier} ${selectedQuote.rawAmount}`);
 }
 
 async function assertNoCreditDepositMinimumError(page) {

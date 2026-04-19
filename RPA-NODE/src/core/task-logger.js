@@ -1,4 +1,5 @@
 const { getActiveContextCount, getPendingTaskCount } = require("./context-queue");
+const logger = require("./logger");
 
 function formatBytes(bytes) {
     return `${Math.round((bytes / 1024 / 1024) * 100) / 100}MB`;
@@ -15,19 +16,35 @@ function getMemorySnapshot() {
     };
 }
 
-function logTask(taskId, message, extra = {}) {
+function shortTaskId(taskId) {
+    return String(taskId || "cli").slice(0, 8);
+}
+
+function formatMeta(meta) {
+    return Object.entries(meta)
+        .filter(([, value]) => value !== undefined && value !== null && value !== "")
+        .map(([key, value]) => `${key}=${value}`)
+        .join(" ");
+}
+
+function logTask(taskId, message, extra = {}, options = {}) {
+    const level = options.level || "info";
     const payload = {
-        task_id: taskId || "cli",
         activeContexts: getActiveContextCount(),
         queuedTasks: getPendingTaskCount(),
-        memory: getMemorySnapshot(),
         ...extra,
     };
 
-    console.log(`[task:${payload.task_id}] ${message} ${JSON.stringify(payload)}`);
+    if (logger.shouldLog("debug") || options.includeMemory) {
+        payload.memory = getMemorySnapshot();
+    }
+
+    const meta = formatMeta(payload);
+    logger[level](`[task ${shortTaskId(taskId)}] ${message}${meta ? ` ${meta}` : ""}`);
 }
 
 module.exports = {
     getMemorySnapshot,
     logTask,
+    shortTaskId,
 };

@@ -3,7 +3,8 @@ const http = require("http");
 const path = require("path");
 const { runCetelemFlowWithRetries } = require("./cetelem/flow");
 const { getActiveContextCount, getPendingTaskCount } = require("./core/context-queue");
-const { getMemorySnapshot } = require("./core/task-logger");
+const logger = require("./core/logger");
+const { getMemorySnapshot, shortTaskId } = require("./core/task-logger");
 const { SCREENSHOTS_DIR } = require("./config");
 const { createJob, deleteExpiredJobs, getJob, serializeJob, updateJob } = require("./jobs/store");
 
@@ -137,7 +138,7 @@ function createApiServer() {
 
             sendJson(response, 404, { error: "Ruta no encontrada" });
         } catch (error) {
-            console.error("Error en la API:", error.message);
+            logger.error(`Error en la API: ${error.message}`);
             sendJson(response, 500, { error: error.message });
         }
     });
@@ -146,7 +147,7 @@ function createApiServer() {
 async function executeJob(taskId, payload) {
     updateJob(taskId, { status: "running", error: null });
     const startedAt = performance.now();
-    console.log(`[task:${taskId}] Task recibida.`);
+    logger.info(`[task ${shortTaskId(taskId)}] created`);
 
     try {
         const result = await runCetelemFlowWithRetries(payload, { taskId });
@@ -155,13 +156,17 @@ async function executeJob(taskId, payload) {
             result,
             error: null,
         });
-        console.log(`[task:${taskId}] Task completada en ${Number(((performance.now() - startedAt) / 1000).toFixed(2))}s.`);
+        logger.info(
+            `[task ${shortTaskId(taskId)}] exited code=0 time=${Number(((performance.now() - startedAt) / 1000).toFixed(2))}s screenshot=${result.screenshotPath}`
+        );
     } catch (error) {
         updateJob(taskId, {
             status: "failed",
             error: error.message,
         });
-        console.error(`[task:${taskId}] Task fallida en ${Number(((performance.now() - startedAt) / 1000).toFixed(2))}s: ${error.message}`);
+        logger.error(
+            `[task ${shortTaskId(taskId)}] exited code=1 time=${Number(((performance.now() - startedAt) / 1000).toFixed(2))}s error="${error.message}"`
+        );
     }
 }
 

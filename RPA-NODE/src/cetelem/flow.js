@@ -2,6 +2,7 @@ const fs = require("fs");
 const path = require("path");
 const BrowserManager = require("../core/browser-manager");
 const { enqueueContextTask, getActiveContextCount } = require("../core/context-queue");
+const logger = require("../core/logger");
 const { logTask } = require("../core/task-logger");
 const {
     BAD_URL_TOKEN,
@@ -51,7 +52,7 @@ function isDeadSession(url) {
 
 function validateSession(pageOrPopup) {
     const currentUrl = pageOrPopup.url();
-    console.log("URL actual:", currentUrl);
+    logger.debug(`URL actual: ${currentUrl}`);
 
     if (isDeadSession(currentUrl)) {
         throw new Error("Sesion invalida detectada. Cayo en josso_security_check.");
@@ -61,19 +62,19 @@ function validateSession(pageOrPopup) {
 function registerDialogHandler(pageOrPopup) {
     pageOrPopup.on("dialog", async (dialog) => {
         const message = dialog.message() || "";
-        console.log(`DIALOG: ${message}`);
+        logger.debug(`DIALOG: ${message}`);
 
         try {
             if (message.includes(SYSTEMA_EXPERTO_ERROR_TEXT)) {
                 await dialog.accept();
-                console.log("DIALOG aceptado: Systema Experto");
+                logger.debug("DIALOG aceptado: Systema Experto");
                 return;
             }
 
             await dialog.dismiss();
-            console.log("DIALOG descartado");
+            logger.debug("DIALOG descartado");
         } catch (error) {
-            console.log(`[WARN] No se pudo cerrar dialog: ${error.message}`);
+            logger.warn(`No se pudo cerrar dialog: ${error.message}`);
         }
     });
 }
@@ -206,16 +207,16 @@ async function waitForValidQuoteScreen(popup, timeout = 45000) {
                 }
 
                 lastFailures = [...failures];
-                console.log(`Validacion ${attempt}/${validationsPerCycle} fallo:`, failures);
+                logger.debug(`Validacion ${attempt}/${validationsPerCycle} fallo`, { failures });
             } catch (error) {
                 lastFailures = [`exception=${error.message}`];
-                console.log(`Validacion ${attempt}/${validationsPerCycle} lanzo error: ${error.message}`);
+                logger.debug(`Validacion ${attempt}/${validationsPerCycle} lanzo error: ${error.message}`);
             }
         }
 
         if (reloads < maxReloads) {
             reloads += 1;
-            console.log(`Pantalla invalida tras ${validationsPerCycle} validaciones ${JSON.stringify(lastFailures)}. Reload ${reloads}/${maxReloads}`);
+            logger.warn(`Pantalla invalida. Reload ${reloads}/${maxReloads}`, { failures: lastFailures });
             await popup.reload({ waitUntil: "domcontentloaded", timeout: 30000 });
             continue;
         }
@@ -310,28 +311,28 @@ async function closeQuoteSession(popup) {
         await confirmModal.waitFor({ state: "visible", timeout: 7000 });
         await confirmModal.locator("a.l-btn", { hasText: /^Ok$/ }).last().click({ timeout: 5000 });
         await popup.waitForTimeout(1000);
-        console.log("Sesion de cotizacion cerrada desde buttonClose.");
+        logger.debug("Sesion de cotizacion cerrada desde buttonClose.");
     } catch (error) {
-        console.log(`[WARN] No se pudo cerrar sesion desde buttonClose: ${error.message}`);
+        logger.warn(`No se pudo cerrar sesion desde buttonClose: ${error.message}`);
     }
 }
 
 async function performLogin(page) {
-    console.log("Abriendo login...");
+    logger.debug("Abriendo login...");
     await page.goto(LOGIN_URL, { timeout: 30000 });
     validateSession(page);
 
-    console.log("Ingresando usuario...");
+    logger.debug("Ingresando usuario...");
     await page.fill('input[name="userName"]', USUARIO);
 
-    console.log("Click primer ingresar...");
+    logger.debug("Click primer ingresar...");
     await page.locator("#btnEntrar").click();
     validateSession(page);
 
-    console.log("Ingresando password...");
+    logger.debug("Ingresando password...");
     await page.fill('input[name="userPassword"]', PASSWORD);
 
-    console.log("Click segundo ingresar y esperando popup...");
+    logger.debug("Click segundo ingresar y esperando popup...");
     const [popup] = await Promise.all([
         page.waitForEvent("popup", { timeout: 15000 }),
         page.locator("#btnEntrar").click(),
@@ -383,7 +384,7 @@ async function runRequestedDataFlows(page, payload) {
             throw new Error(`No viene el objeto ${flow} en el JSON`);
         }
 
-        console.log(`Ejecutando flujo de datos: ${flow}`);
+        logger.debug(`Ejecutando flujo de datos: ${flow}`);
         const flowStartTime = performance.now();
         await fillFlow(page, payload);
         timings.push({
@@ -404,7 +405,7 @@ async function runCetelemFlow(payload, options = {}) {
     const consoleLogs = [];
     const startTime = performance.now();
 
-    logTask(taskId, "Esperando slot de context");
+    logTask(taskId, "queued", {}, { level: "debug" });
 
     return enqueueContextTask(() => runCetelemFlowInContext({
         payload,
@@ -435,7 +436,7 @@ async function runCetelemFlowInContext({
     const onConsole = (message) => {
         const text = message.text();
         consoleLogs.push(text);
-        console.log("CONSOLE:", text);
+        logger.debug(`BROWSER_CONSOLE: ${text}`);
     };
 
     try {
@@ -447,11 +448,11 @@ async function runCetelemFlowInContext({
         page.on("console", onConsole);
         registerDialogHandler(page);
 
-        logTask(taskId, "Context iniciado", {
+        logTask(taskId, "started", {
             elapsedSeconds: elapsedSecondsSince(startTime),
             videoEnabled,
         });
-        console.log(`Carpeta de videos: ${VIDEOS_DIR}`);
+        logger.debug(`Carpeta de videos: ${VIDEOS_DIR}`);
         const loginStartTime = performance.now();
         popup = await performLogin(page);
         const loginElapsedSeconds = elapsedSecondsSince(loginStartTime);
@@ -475,13 +476,13 @@ async function runCetelemFlowInContext({
             try {
                 vehiclePriceTax = await readVehiclePriceTax(popup);
             } catch (error) {
-                console.log(`[WARN] No se pudo leer vehiclePriceTax: ${error.message}`);
+                logger.warn(`No se pudo leer vehiclePriceTax: ${error.message}`);
             }
 
             try {
                 vehicleTotalAmount = await readVehicleTotalAmount(popup);
             } catch (error) {
-                console.log(`[WARN] No se pudo leer vehicleTotalAmount: ${error.message}`);
+                logger.warn(`No se pudo leer vehicleTotalAmount: ${error.message}`);
             }
         }
 
@@ -489,13 +490,13 @@ async function runCetelemFlowInContext({
             try {
                 insuranceOptions = await readInsuranceOptions(popup);
             } catch (error) {
-                console.log(`[WARN] No se pudieron leer opciones de seguro: ${error.message}`);
+                logger.warn(`No se pudieron leer opciones de seguro: ${error.message}`);
             }
 
             try {
                 insuranceMonthlyFee = await readInsuranceMonthlyFee(popup);
             } catch (error) {
-                console.log(`[WARN] No se pudo leer insuranceMonthlyFee: ${error.message}`);
+                logger.warn(`No se pudo leer insuranceMonthlyFee: ${error.message}`);
             }
         }
 
@@ -538,23 +539,23 @@ async function runCetelemFlowInContext({
                 type: "png",
                 fullPage: true,
             });
-            console.log(`Screenshot error: ${errorScreenshotPath}`);
+            logger.warn(`Screenshot error: ${errorScreenshotPath}`);
         } catch {
             // no-op
         }
 
         try {
             fs.writeFileSync(consolePath, consoleLogs.join("\n"), "utf8");
-            console.log(`Console log: ${consolePath}`);
+            logger.debug(`Console log: ${consolePath}`);
         } catch {
             // no-op
         }
 
         throw error;
     } finally {
-        logTask(taskId, "Cerrando context", {
+        logTask(taskId, "stopping", {
             elapsedSeconds: elapsedSecondsSince(startTime),
-        });
+        }, { level: "debug" });
 
         let pageVideo = null;
         let popupVideo = null;
@@ -593,17 +594,17 @@ async function runCetelemFlowInContext({
                 await context.close();
             }
         } catch (error) {
-            console.warn(`[task:${taskId || "cli"}] No se pudo cerrar context: ${error.message}`);
+            logger.warn(`[task:${taskId || "cli"}] No se pudo cerrar context: ${error.message}`);
         }
 
         const taskPageVideo = moveArtifact(pageVideo, buildTaskArtifactPath(taskId, "page", "webm"));
         const taskPopupVideo = moveArtifact(popupVideo, buildTaskArtifactPath(taskId, "popup", "webm"));
 
-        console.log(`Video page: ${taskPageVideo || pageVideo || "N/A"}`);
-        console.log(`Video popup: ${taskPopupVideo || popupVideo || "N/A"}`);
-        logTask(taskId, "Context cerrado", {
+        logger.debug(`Video page: ${taskPageVideo || pageVideo || "N/A"}`);
+        logger.debug(`Video popup: ${taskPopupVideo || popupVideo || "N/A"}`);
+        logTask(taskId, "stopped", {
             elapsedSeconds: elapsedSecondsSince(startTime),
-        });
+        }, { level: "debug" });
     }
 }
 
@@ -612,14 +613,14 @@ async function runCetelemFlowWithRetries(payload, options = {}) {
 
     for (let attempt = 1; attempt <= MAX_REINTENTOS; attempt += 1) {
         try {
-            console.log(`Intento ${attempt}/${MAX_REINTENTOS}`);
+            logger.debug(`[task:${options.taskId || "cli"}] Intento ${attempt}/${MAX_REINTENTOS}`);
             return await runCetelemFlow(payload, options);
         } catch (error) {
             lastError = error;
-            console.error(`ERROR en intento ${attempt}: ${error.message}`);
+            logger.warn(`[task:${options.taskId || "cli"}] Error en intento ${attempt}/${MAX_REINTENTOS}: ${error.message}`);
 
             if (attempt < MAX_REINTENTOS) {
-                console.log("Reintentando con nueva sesion...");
+                logger.debug(`[task:${options.taskId || "cli"}] Reintentando con nueva sesion...`);
             }
         }
     }

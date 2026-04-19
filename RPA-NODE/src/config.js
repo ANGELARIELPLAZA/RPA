@@ -4,6 +4,7 @@ const dotenv = require("dotenv");
 
 dotenv.config({
     path: process.env.DOTENV_PATH || path.resolve(__dirname, "..", ".env"),
+    quiet: true,
 });
 
 const USUARIO = process.env.USUARIO;

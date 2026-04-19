@@ -30,7 +30,13 @@ PORT=3000
 HOST=0.0.0.0
 MAX_REINTENTOS=3
 MAX_CONTEXTS=3
+LOG_LEVEL=info
 ```
+
+Logs:
+- `LOG_LEVEL=info`: estilo compacto, similar a contenedores: `created`, `started`, `exited`.
+- `LOG_LEVEL=debug`: incluye pasos internos, URLs, consola del navegador, memoria y reintentos finos.
+- `LOG_LEVEL=warn|error|silent`: reduce aun mas la salida.
 
 Salud:
 GET /health

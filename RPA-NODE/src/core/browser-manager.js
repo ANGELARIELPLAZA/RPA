@@ -1,5 +1,6 @@
 const { chromium } = require("playwright");
 const { HEADLESS, assertCredentials } = require("../config");
+const logger = require("./logger");
 
 let browser = null;
 let initPromise = null;
@@ -17,11 +18,11 @@ async function launchBrowser() {
         if (browser === nextBrowser) {
             browser = null;
         }
-        console.error("[browser] Browser desconectado.");
+        logger.error("[browser] Browser desconectado.");
     });
 
     browser = nextBrowser;
-    console.log("[browser] Browser global iniciado.");
+    logger.info("[browser] Browser global iniciado.");
     return browser;
 }
 
@@ -55,11 +56,11 @@ async function restart() {
         try {
             await currentBrowser.close();
         } catch (error) {
-            console.warn(`[browser] No se pudo cerrar browser previo: ${error.message}`);
+            logger.warn(`[browser] No se pudo cerrar browser previo: ${error.message}`);
         }
     }
 
-    console.warn("[browser] Reiniciando browser global.");
+    logger.warn("[browser] Reiniciando browser global.");
     return init();
 }
 
@@ -73,9 +74,9 @@ async function shutdown() {
 
     try {
         await currentBrowser.close();
-        console.log("[browser] Browser global cerrado.");
+        logger.info("[browser] Browser global cerrado.");
     } catch (error) {
-        console.warn(`[browser] Error cerrando browser global: ${error.message}`);
+        logger.warn(`[browser] Error cerrando browser global: ${error.message}`);
     }
 }
 
