@@ -2,6 +2,7 @@ const { createApiServer } = require("./src/server");
 const BrowserManager = require("./src/core/browser-manager");
 const { runCetelemFlowWithRetries } = require("./src/cetelem/flow");
 const { DEFAULT_CLIENT_PAYLOAD, SERVER_HOST, SERVER_PORT } = require("./src/config");
+const logger = require("./src/core/logger");
 
 async function runCli() {
     try {
@@ -19,6 +20,15 @@ async function runCli() {
 
 async function runServer() {
     await BrowserManager.init();
+
+    process.on("unhandledRejection", (reason) => {
+        const message = reason instanceof Error ? reason.stack || reason.message : String(reason);
+        logger.error(`Unhandled rejection: ${message}`);
+    });
+
+    process.on("uncaughtException", (error) => {
+        logger.error(`Uncaught exception: ${error.stack || error.message}`);
+    });
 
     const server = createApiServer();
 

@@ -66,6 +66,14 @@ function createNonRetryableError(message) {
     return error;
 }
 
+function createPortalUnavailableError(statusCode, url) {
+    const error = createNonRetryableError(`Portal no disponible: ${statusCode} Bad Gateway (nginx).`);
+    error.code = "PORTAL_BAD_GATEWAY_502";
+    error.portalStatus = statusCode;
+    error.portalUrl = url || null;
+    return error;
+}
+
 function createTimestamp() {
     return new Date().toISOString().replace(/[-:]/g, "").replace(/\..+/, "").replace("T", "_");
 }
@@ -193,7 +201,7 @@ async function gotoAndSettle(page, url, label, timeout = 30000) {
         if (status === 502) {
             logger.warn(`[nav:${label}] portal devolvio 502 Bad Gateway`, { url });
             const diagPath = await captureDiagnosticScreenshot(page, "bad_gateway").catch(() => null);
-            const error = createNonRetryableError("Portal devolvio 502 Bad Gateway (nginx). Abortando task.");
+            const error = createPortalUnavailableError(502, url);
             if (diagPath) {
                 error.screenshotPath = diagPath;
                 error.errorScreenshotPath = diagPath;
@@ -601,7 +609,7 @@ async function waitForValidQuoteScreen(popup, timeout = 45000) {
                 const normalizedBody = await getNormalizedBodyText(currentPopup, 1500);
                 if (isBadGatewayBody(normalizedBody)) {
                     const diagPath = await captureDiagnosticScreenshot(currentPopup, "bad_gateway").catch(() => null);
-                    const error = createNonRetryableError("Portal en 502 Bad Gateway (nginx). Abortando task.");
+                    const error = createPortalUnavailableError(502, getPageUrl(currentPopup));
                     if (diagPath) {
                         error.screenshotPath = diagPath;
                         error.errorScreenshotPath = diagPath;
@@ -1246,8 +1254,10 @@ async function runCetelemFlowInContext({
                 type: "png",
                 fullPage: true,
             });
-            error.screenshotPath = errorScreenshotPath;
             error.errorScreenshotPath = errorScreenshotPath;
+            if (!error.screenshotPath) {
+                error.screenshotPath = errorScreenshotPath;
+            }
             logger.warn(`Screenshot error: ${errorScreenshotPath}`);
         } catch {
             // no-op
