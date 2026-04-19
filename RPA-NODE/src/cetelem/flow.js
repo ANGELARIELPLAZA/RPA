@@ -10,6 +10,7 @@ const {
     LOGS_DIR,
     MAX_REINTENTOS,
     PASSWORD,
+    RECORD_VIDEO,
     SCREENSHOTS_DIR,
     TIPO_PERSONA_READY_VALUE,
     TIPO_PERSONA_SELECTOR,
@@ -369,7 +370,7 @@ async function createBrowserSession() {
 
     const browser = await BrowserManager.getBrowser();
     const activeContexts = getActiveContextCount();
-    const videoEnabled = activeContexts <= 1;
+    const videoEnabled = RECORD_VIDEO && activeContexts <= 1;
     const contextOptions = {
         viewport: { width: 1366, height: 900 },
     };

@@ -30,6 +30,7 @@ PORT=3000
 HOST=0.0.0.0
 MAX_REINTENTOS=3
 MAX_CONTEXTS=3
+RECORD_VIDEO=true
 LOG_LEVEL=info
 ```
 
@@ -45,8 +46,9 @@ GET /healthz
 La respuesta de salud incluye `activeContexts`, `queuedTasks` y memoria del proceso.
 
 Artefactos:
-- Con 1 context activo se graba video y se toma screenshot.
-- Con mas de 1 context activo se desactiva video para los contexts adicionales y solo se toma screenshot/log.
+- `RECORD_VIDEO=true`: con 1 context activo se graba video y se toma screenshot.
+- `RECORD_VIDEO=false`: deshabilita el video; solo se toma screenshot/log.
+- Con mas de 1 context activo se desactiva video para los contexts adicionales aunque `RECORD_VIDEO=true`.
 
 Endpoint:
 POST /cotizar-cetelem-async
