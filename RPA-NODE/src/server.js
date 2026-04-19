@@ -6,7 +6,7 @@ const { normalizeCetelemPayload } = require("./cetelem/normalize-payload");
 const { getActiveContextCount, getPendingTaskCount } = require("./core/context-queue");
 const logger = require("./core/logger");
 const { getMemorySnapshot, shortTaskId } = require("./core/task-logger");
-const { SCREENSHOTS_DIR } = require("./config");
+const { SCREENSHOTS_DIR, isRecordVideoEnabled, setRecordVideoEnabled } = require("./config");
 const { createJob, deleteExpiredJobs, getJob, serializeJob, updateJob } = require("./jobs/store");
 
 function createApiServer() {
@@ -35,7 +35,30 @@ function createApiServer() {
                     ok: true,
                     activeContexts: getActiveContextCount(),
                     queuedTasks: getPendingTaskCount(),
+                    recordVideo: isRecordVideoEnabled(),
                     memory: getMemorySnapshot(),
+                });
+                return;
+            }
+
+            if (request.method === "GET" && request.url === "/record-video") {
+                sendJson(response, 200, {
+                    enabled: isRecordVideoEnabled(),
+                });
+                return;
+            }
+
+            if (request.method === "POST" && request.url === "/record-video") {
+                const payload = await readJsonBody(request);
+                const enabled = payload.enabled ?? payload.recordVideo;
+
+                if (typeof enabled !== "boolean") {
+                    sendJson(response, 400, { error: "enabled debe ser boolean" });
+                    return;
+                }
+
+                sendJson(response, 200, {
+                    enabled: setRecordVideoEnabled(enabled),
                 });
                 return;
             }

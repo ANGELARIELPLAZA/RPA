@@ -50,6 +50,11 @@ Artefactos:
 - `RECORD_VIDEO=false`: deshabilita el video; solo se toma screenshot/log.
 - Con mas de 1 context activo se desactiva video para los contexts adicionales aunque `RECORD_VIDEO=true`.
 
+Control de grabado en caliente:
+- `GET /record-video`: consulta si las nuevas tasks grabaran video.
+- `POST /record-video` con `{ "enabled": false }`: deshabilita el grabado para nuevas tasks.
+- `POST /record-video` con `{ "enabled": true }`: habilita el grabado para nuevas tasks.
+
 Endpoint:
 POST /cotizar-cetelem-async
 

@@ -6,11 +6,11 @@ const logger = require("../core/logger");
 const { logTask, shortTaskId } = require("../core/task-logger");
 const {
     BAD_URL_TOKEN,
+    isRecordVideoEnabled,
     LOGIN_URL,
     LOGS_DIR,
     MAX_REINTENTOS,
     PASSWORD,
-    RECORD_VIDEO,
     SCREENSHOTS_DIR,
     TIPO_PERSONA_READY_VALUE,
     TIPO_PERSONA_SELECTOR,
@@ -370,7 +370,7 @@ async function createBrowserSession() {
 
     const browser = await BrowserManager.getBrowser();
     const activeContexts = getActiveContextCount();
-    const videoEnabled = RECORD_VIDEO && activeContexts <= 1;
+    const videoEnabled = isRecordVideoEnabled() && activeContexts <= 1;
     const contextOptions = {
         viewport: { width: 1366, height: 900 },
     };

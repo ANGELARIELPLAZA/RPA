@@ -10,7 +10,7 @@ dotenv.config({
 const USUARIO = process.env.USUARIO;
 const PASSWORD = process.env.PASSWORD;
 const HEADLESS = (process.env.HEADLESS || "true").toLowerCase() === "true";
-const RECORD_VIDEO = (process.env.RECORD_VIDEO || "true").toLowerCase() === "true";
+let recordVideoEnabled = (process.env.RECORD_VIDEO || "true").toLowerCase() === "true";
 const SERVER_PORT = Number(process.env.PORT || 3000);
 const SERVER_HOST = process.env.HOST || "0.0.0.0";
 const MAX_REINTENTOS = Number(process.env.MAX_REINTENTOS || 3);
@@ -54,19 +54,29 @@ function assertCredentials() {
     }
 }
 
+function isRecordVideoEnabled() {
+    return recordVideoEnabled;
+}
+
+function setRecordVideoEnabled(enabled) {
+    recordVideoEnabled = Boolean(enabled);
+    return recordVideoEnabled;
+}
+
 module.exports = {
     BAD_URL_TOKEN,
     DEFAULT_CLIENT_PAYLOAD,
     HEADLESS,
+    isRecordVideoEnabled,
     LOGIN_URL,
     LOGS_DIR,
     MAX_CONTEXTS,
     MAX_REINTENTOS,
     PASSWORD,
-    RECORD_VIDEO,
     SCREENSHOTS_DIR,
     SERVER_HOST,
     SERVER_PORT,
+    setRecordVideoEnabled,
     TIPO_PERSONA_READY_VALUE,
     TIPO_PERSONA_SELECTOR,
     USUARIO,
