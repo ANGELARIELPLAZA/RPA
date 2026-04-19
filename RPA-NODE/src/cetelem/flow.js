@@ -1,7 +1,7 @@
 const fs = require("fs");
 const path = require("path");
 const BrowserManager = require("../core/browser-manager");
-const { enqueueContextTask } = require("../core/context-queue");
+const { enqueueContextTask, getActiveContextCount } = require("../core/context-queue");
 const { logTask } = require("../core/task-logger");
 const {
     BAD_URL_TOKEN,
@@ -230,16 +230,27 @@ async function createBrowserSession() {
     assertCredentials();
 
     const browser = await BrowserManager.getBrowser();
+    const activeContexts = getActiveContextCount();
+    const videoEnabled = activeContexts <= 1;
+    const contextOptions = {
+        viewport: { width: 1366, height: 900 },
+    };
+
+    if (videoEnabled) {
+        contextOptions.recordVideo = { dir: VIDEOS_DIR };
+    }
+
     let context = null;
 
     try {
-        context = await browser.newContext({
-            recordVideo: { dir: VIDEOS_DIR },
-            viewport: { width: 1366, height: 900 },
-        });
+        context = await browser.newContext(contextOptions);
         const page = await context.newPage();
 
-        return { context, page };
+        return {
+            context,
+            page,
+            videoEnabled,
+        };
     } catch (error) {
         if (context) {
             await context.close().catch(() => {});
@@ -417,6 +428,7 @@ async function runCetelemFlowInContext({
 }) {
     let context = null;
     let page = null;
+    let videoEnabled = false;
 
     let popup = null;
 
@@ -430,12 +442,14 @@ async function runCetelemFlowInContext({
         const session = await createBrowserSession();
         context = session.context;
         page = session.page;
+        videoEnabled = session.videoEnabled;
 
         page.on("console", onConsole);
         registerDialogHandler(page);
 
         logTask(taskId, "Context iniciado", {
             elapsedSeconds: elapsedSecondsSince(startTime),
+            videoEnabled,
         });
         console.log(`Carpeta de videos: ${VIDEOS_DIR}`);
         const loginStartTime = performance.now();
@@ -546,13 +560,13 @@ async function runCetelemFlowInContext({
         let popupVideo = null;
 
         try {
-            pageVideo = page ? await page.video()?.path() : null;
+            pageVideo = videoEnabled && page ? await page.video()?.path() : null;
         } catch {
             // no-op
         }
 
         try {
-            popupVideo = popup ? await popup.video()?.path() : null;
+            popupVideo = videoEnabled && popup ? await popup.video()?.path() : null;
         } catch {
             // no-op
         }
