@@ -2,6 +2,7 @@ const fs = require("fs");
 const http = require("http");
 const path = require("path");
 const { runCetelemFlowWithRetries } = require("./cetelem/flow");
+const { normalizeCetelemPayload } = require("./cetelem/normalize-payload");
 const { getActiveContextCount, getPendingTaskCount } = require("./core/context-queue");
 const logger = require("./core/logger");
 const { getMemorySnapshot, shortTaskId } = require("./core/task-logger");
@@ -14,7 +15,7 @@ function createApiServer() {
             deleteExpiredJobs();
 
             if (request.method === "POST" && request.url === "/cotizar-cetelem-async") {
-                const payload = await readJsonBody(request);
+                const payload = normalizeCetelemPayload(await readJsonBody(request));
                 const job = createJob(payload);
 
                 void executeJob(job.id, payload);
@@ -67,19 +68,21 @@ function createApiServer() {
                     return;
                 }
 
-                if (job.status !== "completed" || !job.result?.screenshotBuffer) {
+                if (!["completed", "failed"].includes(job.status) || !job.result?.screenshotPath) {
                     sendJson(response, 409, { error: "La imagen aun no esta lista", status: job.status });
                     return;
                 }
 
+                const imageBuffer = job.result.screenshotBuffer || readResultScreenshot(job.result.screenshotPath);
+
                 response.writeHead(200, {
                     "Content-Type": "image/png",
-                    "Content-Length": Buffer.byteLength(job.result.screenshotBuffer),
+                    "Content-Length": Buffer.byteLength(imageBuffer),
                     "X-Screenshot-Path": job.result.screenshotPath,
-                    "X-Console-Path": job.result.consolePath,
-                    "X-Elapsed-Seconds": String(job.result.elapsedSeconds),
+                    "X-Console-Path": job.result.consolePath || "",
+                    "X-Elapsed-Seconds": String(job.result.elapsedSeconds || ""),
                 });
-                response.end(job.result.screenshotBuffer);
+                response.end(imageBuffer);
                 return;
             }
 
@@ -95,16 +98,21 @@ function createApiServer() {
                     return;
                 }
 
-                if (job.status !== "completed" || !job.result?.screenshotBuffer) {
+                if (!["completed", "failed"].includes(job.status) || !job.result?.screenshotPath) {
                     sendJson(response, 409, { error: "El resultado aun no esta listo", status: job.status });
                     return;
                 }
 
+                const imageBuffer = job.result.screenshotBuffer || readResultScreenshot(job.result.screenshotPath);
+
                 sendJson(response, 200, {
-                    screenshotRaw: job.result.screenshotBuffer.toString("base64"),
+                    status: job.status,
+                    error: job.error,
+                    screenshotRaw: imageBuffer.toString("base64"),
                     screenshotPath: job.result.screenshotPath,
                     consolePath: job.result.consolePath,
                     elapsedSeconds: job.result.elapsedSeconds,
+                    errorScreenshot: Boolean(job.result.errorScreenshot),
                     executedFlows: job.result.executedFlows || [],
                     stageTimings: job.result.stageTimings || [],
                     insuranceMonthlyFee: job.result.insuranceMonthlyFee || null,
@@ -162,12 +170,26 @@ async function executeJob(taskId, payload) {
     } catch (error) {
         updateJob(taskId, {
             status: "failed",
+            result: {
+                consolePath: error.consolePath || null,
+                elapsedSeconds: error.elapsedSeconds || Number(((performance.now() - startedAt) / 1000).toFixed(2)),
+                errorScreenshot: Boolean(error.screenshotPath || error.errorScreenshotPath),
+                screenshotPath: error.screenshotPath || error.errorScreenshotPath || null,
+            },
             error: error.message,
         });
         logger.error(
-            `[task ${shortTaskId(taskId)}] exited code=1 time=${Number(((performance.now() - startedAt) / 1000).toFixed(2))}s error="${error.message}"`
+            `[task ${shortTaskId(taskId)}] exited code=1 time=${Number(((performance.now() - startedAt) / 1000).toFixed(2))}s screenshot=${error.screenshotPath || error.errorScreenshotPath || "N/A"} error="${error.message}"`
         );
     }
+}
+
+function readResultScreenshot(screenshotPath) {
+    if (!screenshotPath || !isPathInsideDirectory(screenshotPath, SCREENSHOTS_DIR) || !fs.existsSync(screenshotPath)) {
+        throw new Error("Screenshot no encontrada");
+    }
+
+    return fs.readFileSync(screenshotPath);
 }
 
 function readJsonBody(request) {

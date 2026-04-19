@@ -60,6 +60,31 @@ Body esperado:
   }
 }
 
+El endpoint tambien acepta payload plano en español. Se normaliza antes de crear la task:
+
+```json
+{
+  "tipo_vehiculo": "N",
+  "uso_vehicular": "Personal",
+  "marca": "KIA",
+  "anio": 2026,
+  "modelo": "K3 SEDAN",
+  "version": "GT LINE",
+  "enganche_porcentaje": 30.0,
+  "plan_credito": "2435",
+  "plazo_credito": "12",
+  "codigo_postal": "96536",
+  "contratacion_seguro": "01",
+  "tipo_seguro": "01",
+  "forma_pago": "02",
+  "plazo_remanente": "01",
+  "paquete_seguro": "PLUS",
+  "nivel_detalle": "seguros"
+}
+```
+
+`nivel_detalle: "seguros"` se ejecuta como `vehiculo`, `credito` y `seguro`, usando los campos disponibles.
+
 Consultar estado:
 GET /status/:task_id
 

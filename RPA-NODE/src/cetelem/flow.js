@@ -3,7 +3,7 @@ const path = require("path");
 const BrowserManager = require("../core/browser-manager");
 const { enqueueContextTask, getActiveContextCount } = require("../core/context-queue");
 const logger = require("../core/logger");
-const { logTask } = require("../core/task-logger");
+const { logTask, shortTaskId } = require("../core/task-logger");
 const {
     BAD_URL_TOKEN,
     LOGIN_URL,
@@ -30,6 +30,9 @@ const {
 
 const READY_TEXT_RAZON_SOCIAL = "capturar nombre de razon social como aparece en el registro del rfc o documentos oficiales";
 const SYSTEMA_EXPERTO_ERROR_TEXT = "Error obteniendo variables para Systema Experto";
+const ACTIVE_POPUP_SESSION_TEXT = "su sesión se encuentra activa en una ventana emergente";
+const POPUP_TIMEOUT_MS = 15000;
+const REOPEN_POPUP_SELECTOR = "#btnReopen";
 
 const DATA_FLOWS = {
     cliente: fillClientData,
@@ -40,6 +43,12 @@ const DATA_FLOWS = {
 
 function isBrowserClosedError(error) {
     return /browser.*closed|browser.*disconnected|target.*closed|context.*closed|has been closed/i.test(error.message || "");
+}
+
+function createNonRetryableError(message) {
+    const error = new Error(message);
+    error.retryable = false;
+    return error;
 }
 
 function createTimestamp() {
@@ -77,6 +86,19 @@ function registerDialogHandler(pageOrPopup) {
             logger.warn(`No se pudo cerrar dialog: ${error.message}`);
         }
     });
+}
+
+async function getLowerBodyText(pageOrPopup, timeout = 2000) {
+    try {
+        return (await pageOrPopup.locator("body").innerText({ timeout })).toLowerCase();
+    } catch {
+        return "";
+    }
+}
+
+async function detectActivePopupSession(page) {
+    const body = await getLowerBodyText(page, 2500);
+    return body.includes(ACTIVE_POPUP_SESSION_TEXT);
 }
 
 async function prepareFullQuoteScreenshot(popup) {
@@ -144,10 +166,8 @@ async function waitForValidQuoteScreen(popup, timeout = 45000) {
                     failures.push("url");
                 }
 
-                let body = "";
-                try {
-                    body = (await popup.locator("body").innerText({ timeout: 2000 })).toLowerCase();
-                } catch {
+                const body = await getLowerBodyText(popup, 2000);
+                if (!body) {
                     failures.push("body");
                 }
 
@@ -333,10 +353,7 @@ async function performLogin(page) {
     await page.fill('input[name="userPassword"]', PASSWORD);
 
     logger.debug("Click segundo ingresar y esperando popup...");
-    const [popup] = await Promise.all([
-        page.waitForEvent("popup", { timeout: 15000 }),
-        page.locator("#btnEntrar").click(),
-    ]);
+    const popup = await waitForQuotePopupAfterPassword(page);
 
     await popup.waitForLoadState("domcontentloaded", { timeout: 30000 });
     await waitForValidQuoteScreen(popup, 40000);
@@ -347,6 +364,97 @@ async function performLogin(page) {
     }
 
     return popup;
+}
+
+async function waitForQuotePopupAfterPassword(page) {
+    const context = page.context();
+    const pagesBeforeClick = new Set(context.pages());
+    const popupPromise = page.waitForEvent("popup", { timeout: POPUP_TIMEOUT_MS }).catch(() => null);
+    const pagePromise = context.waitForEvent("page", { timeout: POPUP_TIMEOUT_MS }).catch(() => null);
+
+    await page.locator("#btnEntrar").click();
+
+    const popup = await Promise.race([
+        popupPromise,
+        pagePromise,
+        waitForActivePopupMessage(page),
+    ]);
+
+    if (popup) {
+        return popup;
+    }
+
+    const existingPopup = context.pages().find((candidate) => (
+        candidate !== page
+        && !pagesBeforeClick.has(candidate)
+        && !candidate.isClosed()
+    ));
+
+    if (existingPopup) {
+        return existingPopup;
+    }
+
+    if (await detectActivePopupSession(page)) {
+        return reopenQuotePopup(page, pagesBeforeClick);
+    }
+
+    throw new Error(`No se abrio popup de cotizador en ${POPUP_TIMEOUT_MS}ms.`);
+}
+
+async function waitForActivePopupMessage(page) {
+    const deadline = Date.now() + POPUP_TIMEOUT_MS;
+
+    while (Date.now() < deadline) {
+        if (await detectActivePopupSession(page)) {
+            return null;
+        }
+
+        await page.waitForTimeout(500);
+    }
+
+    return null;
+}
+
+async function reopenQuotePopup(page, pagesBeforeClick) {
+    const context = page.context();
+
+    logger.warn("Sesion activa en ventana emergente. Reabriendo popup con btnReopen.");
+
+    try {
+        await page.locator(REOPEN_POPUP_SELECTOR).waitFor({ state: "visible", timeout: 5000 });
+    } catch {
+        throw createNonRetryableError(
+            "Sesion activa en ventana emergente detectada, pero no se encontro el boton btnReopen."
+        );
+    }
+
+    const popupPromise = page.waitForEvent("popup", { timeout: POPUP_TIMEOUT_MS }).catch(() => null);
+    const pagePromise = context.waitForEvent("page", { timeout: POPUP_TIMEOUT_MS }).catch(() => null);
+
+    await page.locator(REOPEN_POPUP_SELECTOR).click({ timeout: 5000 });
+
+    const popup = await Promise.race([
+        popupPromise,
+        pagePromise,
+    ]);
+
+    if (popup) {
+        return popup;
+    }
+
+    const existingPopup = context.pages().find((candidate) => (
+        candidate !== page
+        && !pagesBeforeClick.has(candidate)
+        && !candidate.isClosed()
+    ));
+
+    if (existingPopup) {
+        return existingPopup;
+    }
+
+    throw createNonRetryableError(
+        "Sesion activa en ventana emergente detectada, pero btnReopen no abrio el cotizador."
+    );
 }
 
 function elapsedSecondsSince(startTime) {
@@ -526,6 +634,9 @@ async function runCetelemFlowInContext({
             await BrowserManager.restart();
         }
 
+        error.elapsedSeconds = elapsedSecondsSince(startTime);
+        error.consolePath = consolePath;
+
         try {
             const target = popup || page;
             if (!target) {
@@ -539,6 +650,8 @@ async function runCetelemFlowInContext({
                 type: "png",
                 fullPage: true,
             });
+            error.screenshotPath = errorScreenshotPath;
+            error.errorScreenshotPath = errorScreenshotPath;
             logger.warn(`Screenshot error: ${errorScreenshotPath}`);
         } catch {
             // no-op
@@ -546,6 +659,7 @@ async function runCetelemFlowInContext({
 
         try {
             fs.writeFileSync(consolePath, consoleLogs.join("\n"), "utf8");
+            error.consolePath = consolePath;
             logger.debug(`Console log: ${consolePath}`);
         } catch {
             // no-op
@@ -613,14 +727,18 @@ async function runCetelemFlowWithRetries(payload, options = {}) {
 
     for (let attempt = 1; attempt <= MAX_REINTENTOS; attempt += 1) {
         try {
-            logger.debug(`[task:${options.taskId || "cli"}] Intento ${attempt}/${MAX_REINTENTOS}`);
+            logger.debug(`[task ${shortTaskId(options.taskId)}] attempt ${attempt}/${MAX_REINTENTOS}`);
             return await runCetelemFlow(payload, options);
         } catch (error) {
             lastError = error;
-            logger.warn(`[task:${options.taskId || "cli"}] Error en intento ${attempt}/${MAX_REINTENTOS}: ${error.message}`);
+            logger.warn(`[task ${shortTaskId(options.taskId)}] attempt=${attempt}/${MAX_REINTENTOS} error="${error.message}"`);
+
+            if (error.retryable === false) {
+                break;
+            }
 
             if (attempt < MAX_REINTENTOS) {
-                logger.debug(`[task:${options.taskId || "cli"}] Reintentando con nueva sesion...`);
+                logger.debug(`[task ${shortTaskId(options.taskId)}] retrying`);
             }
         }
     }

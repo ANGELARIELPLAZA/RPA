@@ -66,6 +66,7 @@ function serializeJob(job) {
             ? {
                 consolePath: job.result.consolePath,
                 elapsedSeconds: job.result.elapsedSeconds,
+                errorScreenshot: Boolean(job.result.errorScreenshot),
                 executedFlows: job.result.executedFlows || [],
                 stageTimings: job.result.stageTimings || [],
                 insuranceMonthlyFee: job.result.insuranceMonthlyFee || null,
