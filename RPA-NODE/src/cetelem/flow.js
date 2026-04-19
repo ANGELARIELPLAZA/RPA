@@ -226,6 +226,91 @@ async function getNormalizedBodyText(pageOrPopup, timeout = 2000) {
     }
 }
 
+async function detectBlockingOverlay(pageOrPopup) {
+    if (!pageOrPopup || pageOrPopup.isClosed?.()) {
+        return { blocking: false, hits: [] };
+    }
+
+    const candidates = [
+        ".window-mask",
+        ".datagrid-mask",
+        ".datagrid-mask-msg",
+        ".panel-mask",
+        ".panel-loading",
+        ".loading-mask",
+        ".loading-overlay",
+        "[class*=\"mask\"]",
+        "[id*=\"mask\"]",
+        "[class*=\"loading\"]",
+        "[id*=\"loading\"]",
+        "[aria-busy=\"true\"]",
+    ];
+
+    try {
+        return await pageOrPopup.evaluate((selectors) => {
+            const viewportArea = Math.max(1, window.innerWidth * window.innerHeight);
+            const hits = [];
+
+            const isVisible = (el) => {
+                if (!(el instanceof Element)) return false;
+                const style = window.getComputedStyle(el);
+                if (style.display === "none" || style.visibility === "hidden") return false;
+                if (Number(style.opacity || "1") < 0.05) return false;
+                const rect = el.getBoundingClientRect();
+                if (rect.width < 10 || rect.height < 10) return false;
+                if (rect.bottom <= 0 || rect.right <= 0) return false;
+                if (rect.top >= window.innerHeight || rect.left >= window.innerWidth) return false;
+                return true;
+            };
+
+            const isBlocking = (el) => {
+                const style = window.getComputedStyle(el);
+                if (style.pointerEvents === "none") return false;
+                const rect = el.getBoundingClientRect();
+                const area = Math.max(0, rect.width) * Math.max(0, rect.height);
+                const coversViewport = area / viewportArea >= 0.35;
+                if (!coversViewport) return false;
+
+                const x = Math.floor(window.innerWidth / 2);
+                const y = Math.floor(window.innerHeight / 2);
+                const top = document.elementFromPoint(x, y);
+                return top === el || (top instanceof Node && el.contains(top));
+            };
+
+            for (const selector of selectors) {
+                const elements = Array.from(document.querySelectorAll(selector));
+                for (const el of elements) {
+                    if (!isVisible(el)) continue;
+                    const blocking = isBlocking(el);
+                    if (!blocking) continue;
+
+                    const rect = el.getBoundingClientRect();
+                    hits.push({
+                        selector,
+                        tag: el.tagName,
+                        id: el.id || null,
+                        className: typeof el.className === "string" ? el.className : null,
+                        rect: {
+                            x: Math.round(rect.x),
+                            y: Math.round(rect.y),
+                            width: Math.round(rect.width),
+                            height: Math.round(rect.height),
+                        },
+                    });
+
+                    if (hits.length >= 5) {
+                        return { blocking: true, hits };
+                    }
+                }
+            }
+
+            return { blocking: hits.length > 0, hits };
+        }, candidates);
+    } catch {
+        return { blocking: false, hits: [] };
+    }
+}
+
 function classifySessionUrl(url) {
     if (!url) {
         return "sin_url";
@@ -440,12 +525,9 @@ async function waitForValidQuoteScreen(popup, timeout = 45000) {
                     failures.push("body");
                 }
 
-                if (body.includes("cargando, por favor espere")) {
-                    failures.push("overlay");
-                }
-
-                if (body.includes("cargando componentes visuales")) {
-                    failures.push("componentes");
+                const overlay = await detectBlockingOverlay(currentPopup);
+                if (overlay.blocking) {
+                    failures.push("overlay_blocking");
                 }
 
                 try {
@@ -458,15 +540,7 @@ async function waitForValidQuoteScreen(popup, timeout = 45000) {
                     // best-effort: no bloquear por cambios en el header del portal
                 }
 
-                try {
-                    const cotit = currentPopup.locator('img[name="Cotit"]').first();
-                    const count = await cotit.count();
-                    if (count > 0 && (await cotit.isVisible({ timeout: VALIDATION_LOCATOR_TIMEOUT_MS }))) {
-                        failures.push("cotit");
-                    }
-                } catch {
-                    // no-op
-                }
+                // "Cotit" puede aparecer como overlay/transitorio; no se considera criterio de fallo
 
                 if (body.includes(READY_TEXT_RAZON_SOCIAL)) {
                     failures.push("razon_social");
