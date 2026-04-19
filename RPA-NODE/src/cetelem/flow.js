@@ -1067,7 +1067,7 @@ async function runRequestedDataFlows(page, payload) {
         await runStep(`flow-${flow}`, page, async () => {
             await fillFlow(page, payload);
         }, {
-            timeoutMs: 120000,
+            timeoutMs: flow === "vehiculo" ? 240000 : 120000,
             meta: { flow },
         });
         timings.push({

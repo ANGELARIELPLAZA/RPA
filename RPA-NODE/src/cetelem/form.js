@@ -3,6 +3,12 @@ const logger = require("../core/logger");
 
 const FLOW_SECTION_TIMEOUT_MS = 300000;
 const FIELD_STEP_MAX_TIMEOUT_MS = 180000;
+const DEPENDENT_SELECT_KEYS = new Set([
+    "vehicleBrand",
+    "vehicleAnio",
+    "vehicleModel",
+    "vehicleVersion",
+]);
 
 const INSURANCE_CARRIER_ALIASES = {
     CHUBB: "ABA",
@@ -128,37 +134,114 @@ async function resolveFieldSelector(page, field) {
 async function waitForSelectReady(page, selector, expectedValue, options = {}) {
     const timeout = options.timeout ?? 15000;
     const waitOptionsLoaded = options.waitOptionsLoaded ?? true;
+    const fieldName = options.fieldName ?? selector;
 
     await page.waitForSelector(selector, {
         state: "visible",
         timeout,
     });
 
-    await page.waitForFunction(
-        ({ selector: currentSelector, expectedValue: currentValue, waitOptionsLoaded: shouldWaitOptions }) => {
+    const shouldLogFine = DEPENDENT_SELECT_KEYS.has(fieldName);
+    const normalizedExpectedValue = String(expectedValue).trim().toLowerCase();
+    const startedAt = performance.now();
+    const deadline = Date.now() + timeout;
+    let lastSnapshot = null;
+
+    while (Date.now() < deadline) {
+        const snapshot = await page.evaluate(({ selector: currentSelector, expectedValue: currentValue }) => {
             const element = document.querySelector(currentSelector);
-            if (!element || element.tagName !== "SELECT" || element.disabled) {
-                return false;
+            if (!element || element.tagName !== "SELECT") {
+                return {
+                    ok: false,
+                    reason: "missing",
+                    disabled: null,
+                    optionsCount: 0,
+                    placeholderOnly: false,
+                    hasExpectedOption: false,
+                    value: null,
+                    loadingHints: [],
+                };
             }
 
             const options = Array.from(element.options || []);
-            if (options.length === 0) {
-                return false;
-            }
+            const normalizedExpected = String(currentValue).trim().toLowerCase();
+            const hasExpectedOption = options.some((option) => {
+                const value = String(option.value || "").trim().toLowerCase();
+                const text = String(option.textContent || "").trim().toLowerCase();
+                return value === normalizedExpected || text === normalizedExpected;
+            });
 
-            if (shouldWaitOptions && options.length <= 1) {
-                return false;
-            }
+            const placeholderOnly = options.length <= 1;
 
-            return options.some(
-                (option) =>
-                    String(option.value) === String(currentValue) ||
-                    String(option.textContent || "").trim().toLowerCase() === String(currentValue).trim().toLowerCase()
-            );
-        },
-        { selector, expectedValue: String(expectedValue), waitOptionsLoaded },
-        { timeout }
-    );
+            const isVisible = (el) => {
+                if (!(el instanceof Element)) return false;
+                const style = window.getComputedStyle(el);
+                if (style.display === "none" || style.visibility === "hidden") return false;
+                if (Number(style.opacity || "1") < 0.05) return false;
+                const rect = el.getBoundingClientRect();
+                if (rect.width < 10 || rect.height < 10) return false;
+                if (rect.bottom <= 0 || rect.right <= 0) return false;
+                if (rect.top >= window.innerHeight || rect.left >= window.innerWidth) return false;
+                return true;
+            };
+
+            const loadingHints = [];
+            const busy = document.querySelector('[aria-busy="true"]');
+            if (busy && isVisible(busy)) loadingHints.push("aria-busy=true");
+
+            const masks = Array.from(document.querySelectorAll(".window-mask,.datagrid-mask,.panel-mask,.loading-mask,.loading-overlay,[class*=\"mask\"],[id*=\"mask\"]"))
+                .filter(isVisible);
+            if (masks.length > 0) loadingHints.push(`mask_visible=${masks.length}`);
+
+            const loaders = Array.from(document.querySelectorAll(".panel-loading,.datagrid-mask-msg,[class*=\"loading\"],[id*=\"loading\"]"))
+                .filter(isVisible);
+            if (loaders.length > 0) loadingHints.push(`loading_visible=${loaders.length}`);
+
+            return {
+                ok: true,
+                reason: "present",
+                disabled: Boolean(element.disabled),
+                optionsCount: options.length,
+                placeholderOnly,
+                hasExpectedOption,
+                value: String(element.value || ""),
+                loadingHints,
+            };
+        }, { selector, expectedValue: normalizedExpectedValue });
+
+        lastSnapshot = snapshot;
+
+        const hasOptions = snapshot.ok && snapshot.optionsCount > 0;
+        const loadedEnough = !waitOptionsLoaded || (hasOptions && !snapshot.placeholderOnly);
+        const selectable = snapshot.ok && snapshot.disabled === false;
+        const ready = selectable && loadedEnough && snapshot.hasExpectedOption;
+
+        if (shouldLogFine) {
+            logger.info("[select] wait", {
+                key: fieldName,
+                selector,
+                expectedValue: normalizedExpectedValue,
+                elapsedSeconds: elapsedSecondsSince(startedAt),
+                disabled: snapshot.disabled,
+                optionsCount: snapshot.optionsCount,
+                placeholderOnly: snapshot.placeholderOnly,
+                hasExpectedOption: snapshot.hasExpectedOption,
+                value: snapshot.value,
+                loadingHints: snapshot.loadingHints,
+            });
+        }
+
+        if (ready) {
+            return;
+        }
+
+        await page.waitForTimeout(600);
+    }
+
+    const details = lastSnapshot
+        ? ` disabled=${lastSnapshot.disabled} options=${lastSnapshot.optionsCount} placeholderOnly=${lastSnapshot.placeholderOnly} hasExpected=${lastSnapshot.hasExpectedOption} loading=${(lastSnapshot.loadingHints || []).join(",")}`
+        : " sin snapshot";
+    throw new Error(`Timeout esperando opciones para ${fieldName}. ${details}`);
 }
 
 async function resolveSelectOptionValue(page, selector, expectedValue, options = {}) {
@@ -167,6 +250,7 @@ async function resolveSelectOptionValue(page, selector, expectedValue, options =
     await waitForSelectReady(page, selector, expectedValue, {
         timeout,
         waitOptionsLoaded: options.waitOptionsLoaded,
+        fieldName: options.fieldName,
     });
 
     return page.locator(selector).evaluate((element, currentValue) => {
@@ -192,17 +276,33 @@ async function selectAndVerify(page, selector, value, options = {}) {
 
     for (let attempt = 1; attempt <= retries; attempt += 1) {
         try {
-            const optionValue = await resolveSelectOptionValue(page, selector, expectedValue, { timeout });
+            if (DEPENDENT_SELECT_KEYS.has(fieldName)) {
+                logger.info("[select] resolve start", { key: fieldName, selector, expectedValue, attempt, timeout });
+            }
+
+            const optionValue = await resolveSelectOptionValue(page, selector, expectedValue, { timeout, fieldName });
             if (optionValue === null || optionValue === undefined) {
                 throw new Error(`No existe opcion con value/texto=${expectedValue}`);
             }
 
+            const selectStartTime = performance.now();
             await page.selectOption(selector, String(optionValue));
             await page.waitForTimeout(settleMs);
 
             const selectedValue = await page.locator(selector).inputValue();
             if (String(selectedValue) !== String(optionValue)) {
                 throw new Error(`El portal no conservo el valor. Esperado=${optionValue}, actual=${selectedValue}`);
+            }
+
+            if (DEPENDENT_SELECT_KEYS.has(fieldName)) {
+                logger.info("[select] selected", {
+                    key: fieldName,
+                    selector,
+                    optionValue,
+                    elapsedSeconds: elapsedSecondsSince(selectStartTime),
+                });
+
+                await logVehicleDependentSelects(page, `after_${fieldName}`).catch(() => {});
             }
 
             return;
@@ -217,6 +317,38 @@ async function selectAndVerify(page, selector, value, options = {}) {
     }
 
     throw new Error(`No se pudo seleccionar ${fieldName}=${expectedValue}. Ultimo error: ${lastError?.message || "desconocido"}`);
+}
+
+async function logVehicleDependentSelects(page, stage) {
+    const selectors = {
+        vehicleBrand: "#vehicleBrand",
+        vehicleAnio: "#vehicleAnio",
+        vehicleModel: "#vehicleModel",
+        vehicleVersion: "#vehicleVersion",
+    };
+
+    const snapshot = await page.evaluate((sel) => {
+        const read = (selector) => {
+            const element = document.querySelector(selector);
+            if (!element || element.tagName !== "SELECT") {
+                return { present: false };
+            }
+
+            const options = Array.from(element.options || []);
+            const placeholderOnly = options.length <= 1;
+            return {
+                present: true,
+                disabled: Boolean(element.disabled),
+                optionsCount: options.length,
+                placeholderOnly,
+                value: String(element.value || ""),
+            };
+        };
+
+        return Object.fromEntries(Object.entries(sel).map(([key, selector]) => [key, read(selector)]));
+    }, selectors);
+
+    logger.info("[vehicle-selects] snapshot", { stage, snapshot });
 }
 
 async function fillAndVerify(page, selector, value, options = {}) {
@@ -508,6 +640,14 @@ async function fillVehicleData(page, payload) {
 
     if (typeof vehiculo !== "object") {
         throw new Error("El objeto vehiculo debe ser un JSON valido");
+    }
+
+    if (isEmptyValue(vehiculo.vehicleAccesories)) {
+        delete vehiculo.vehicleAccesories;
+    }
+
+    if (isEmptyValue(vehiculo.vehicleAccesoriesAmount)) {
+        delete vehiculo.vehicleAccesoriesAmount;
     }
 
     await runWithTimeout("vehiculo-fields", async () => {
