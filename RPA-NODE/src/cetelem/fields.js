@@ -64,7 +64,6 @@ const VEHICULO_FIELDS = [
     { key: "vehicleAnio", selector: "#vehicleAnio", type: "select", required: true, timeout: 30000, retries: 6, transform: normalizeString },
     { key: "vehicleModel", selector: "#vehicleModel", type: "select", required: true, timeout: 30000, retries: 6, transform: normalizeString },
     { key: "vehicleVersion", selector: "#vehicleVersion", type: "select", required: true, timeout: 30000, retries: 6, transform: normalizeString },
-    { key: "vehiclePriceTax", selector: "#vehiclePriceTax", type: "input", required: false, timeout: 15000, retries: 3, transform: normalizeString },
     { key: "vehicleAccesories", selector: "#vehicleAccesories", type: "input", required: false, timeout: 15000, retries: 3, transform: normalizeUppercase },
     { key: "vehicleIsConverted", selector: "#vehicleIsConverted", type: "checkbox", required: false, timeout: 10000, retries: 3, transform: normalizeCheckbox },
     { key: "vehicleAccesoriesAmount", selector: "#vehicleAccesoriesAmount", type: "input", required: false, timeout: 15000, retries: 3, transform: normalizeString },

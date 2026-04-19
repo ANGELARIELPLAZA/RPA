@@ -199,7 +199,6 @@ async function fillAndVerify(page, selector, value, options = {}) {
 
             const currentValue = (await locator.inputValue()).trim();
             const isMoneyField = [
-                "vehiclePriceTax",
                 "vehicleAccesoriesAmount",
                 "vehicleChargeStationAmount",
                 "creditDepositAmount",

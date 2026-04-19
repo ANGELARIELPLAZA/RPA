@@ -1,3 +1,5 @@
+const logger = require("../core/logger");
+
 const FLOW_ALIASES = {
     cliente: "cliente",
     clientes: "cliente",
@@ -57,10 +59,33 @@ function isInternalPayload(payload) {
     ));
 }
 
+function isEmptyValue(value) {
+    return value === undefined || value === null || String(value).trim() === "";
+}
+
+function sanitizeVehiclePayload(vehiculo, { source = "vehiculo" } = {}) {
+    if (!vehiculo || typeof vehiculo !== "object" || Array.isArray(vehiculo)) {
+        return vehiculo;
+    }
+
+    const hasVehiclePriceTax = Object.prototype.hasOwnProperty.call(vehiculo, "vehiclePriceTax")
+        && !isEmptyValue(vehiculo.vehiclePriceTax);
+
+    if (!hasVehiclePriceTax) {
+        const { vehiclePriceTax, ...rest } = vehiculo; // drop if present (even empty) to avoid fills
+        return rest;
+    }
+
+    logger.warn(`[payload] Campo no editable ignorado: ${source}.vehiclePriceTax=${String(vehiculo.vehiclePriceTax)}`);
+    const { vehiclePriceTax, ...rest } = vehiculo;
+    return rest;
+}
+
 function normalizeInternalPayload(payload) {
+    const vehiculo = sanitizeVehiclePayload(payload.vehiculo, { source: "vehiculo" });
     const normalized = omitEmpty({
         cliente: payload.cliente,
-        vehiculo: payload.vehiculo,
+        vehiculo,
         credito: payload.credito,
         seguro: payload.seguro,
     });
@@ -77,6 +102,14 @@ function normalizeInternalPayload(payload) {
 }
 
 function normalizeFlatPayload(payload) {
+    if (!isEmptyValue(payload.importe_localizador)) {
+        logger.warn(`[payload] Campo no editable ignorado: importe_localizador=${String(payload.importe_localizador)} (Precio auto con IVA)`);
+    }
+
+    if (!isEmptyValue(payload.vehiclePriceTax)) {
+        logger.warn(`[payload] Campo no editable ignorado: vehiclePriceTax=${String(payload.vehiclePriceTax)} (Precio auto con IVA)`);
+    }
+
     const vehiculo = omitEmpty({
         vehicleType: normalizeVehicleType(payload.tipo_vehiculo),
         insuranceVehicleUse: normalizeVehicleUse(payload.uso_vehicular),
@@ -84,7 +117,6 @@ function normalizeFlatPayload(payload) {
         vehicleAnio: normalizeText(payload.anio),
         vehicleModel: normalizeText(payload.modelo),
         vehicleVersion: normalizeText(payload.version),
-        vehiclePriceTax: normalizeNumber(payload.importe_localizador),
         vehicleAccesories: normalizeText(payload.accesorios_nombre),
         vehicleAccesoriesAmount: normalizeNumber(payload.accesorios_importe),
         vehicleChargeStationAmount: normalizeNumber(payload.importe_estacion_carga),
