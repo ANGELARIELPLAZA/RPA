@@ -361,35 +361,80 @@ async function fillAndVerify(page, selector, value, options = {}) {
     let lastError;
 
     for (let attempt = 1; attempt <= retries; attempt += 1) {
-        try {
-            await page.waitForSelector(selector, { state: "visible", timeout });
-
-            const locator = page.locator(selector);
-            const isDateField = fieldName.toLowerCase().includes("birthdate") || selector.toLowerCase().includes("birthdate") || selector.toLowerCase().includes("fecha");
-
-            await locator.click({ timeout });
-            await locator.press("Control+A").catch(() => {});
-            await locator.press("Meta+A").catch(() => {});
-            await locator.press("Delete").catch(() => {});
-            await locator.fill("").catch(() => {});
-
-            if (isDateField) {
-                await locator.pressSequentially(expectedValue, { delay: 120 });
-            } else {
-                await locator.fill(expectedValue);
+        const attemptStartTime = performance.now();
+        const stepTimings = {};
+        const mark = async (step, action) => {
+            const stepStartTime = performance.now();
+            try {
+                return await action();
+            } finally {
+                stepTimings[step] = elapsedSecondsSince(stepStartTime);
             }
+        };
 
-            await locator.dispatchEvent("input").catch(() => {});
-            await locator.dispatchEvent("change").catch(() => {});
-            await locator.blur();
-            await page.waitForTimeout(settleMs);
-
-            const currentValue = (await locator.inputValue()).trim();
+        try {
+            const isDateField = fieldName.toLowerCase().includes("birthdate")
+                || selector.toLowerCase().includes("birthdate")
+                || selector.toLowerCase().includes("fecha");
             const isMoneyField = [
                 "vehicleAccesoriesAmount",
                 "vehicleChargeStationAmount",
                 "creditDepositAmount",
             ].includes(fieldName);
+            const shouldForceEvents = isDateField || isMoneyField;
+            const shouldClearWithKeys = isDateField;
+            const shouldBlur = shouldForceEvents;
+
+            await mark("wait_visible", async () => {
+                await page.waitForSelector(selector, { state: "visible", timeout });
+            });
+
+            const locator = page.locator(selector);
+
+            await mark("click", async () => {
+                if (shouldClearWithKeys) {
+                    await locator.click({ timeout });
+                }
+            });
+
+            await mark("clear", async () => {
+                if (shouldClearWithKeys) {
+                    await locator.press("Control+A").catch(() => {});
+                    await locator.press("Meta+A").catch(() => {});
+                    await locator.press("Delete").catch(() => {});
+                    await locator.fill("").catch(() => {});
+                }
+            });
+
+            await mark("fill", async () => {
+                if (shouldClearWithKeys) {
+                    await locator.pressSequentially(expectedValue, { delay: 120 });
+                    return;
+                }
+
+                await locator.fill(expectedValue);
+            });
+
+            if (shouldForceEvents) {
+                await mark("dispatch_events", async () => {
+                    await locator.dispatchEvent("input").catch(() => {});
+                    await locator.dispatchEvent("change").catch(() => {});
+                });
+            }
+
+            if (shouldBlur) {
+                await mark("blur", async () => {
+                    await locator.blur();
+                });
+            }
+
+            await mark("settle", async () => {
+                await page.waitForTimeout(settleMs);
+            });
+
+            const currentValue = await mark("verify_read", async () => (
+                (await locator.inputValue()).trim()
+            ));
 
             if (isMoneyField) {
                 const currentMoneyValue = parseMoneyValue(currentValue);
@@ -400,10 +445,23 @@ async function fillAndVerify(page, selector, value, options = {}) {
                 throw new Error(`Esperado=${expectedValue}, actual=${currentValue}`);
             }
 
+            logger.info("[input] ok", {
+                key: fieldName,
+                attempt,
+                elapsedSeconds: elapsedSecondsSince(attemptStartTime),
+                steps: stepTimings,
+            });
             return;
         } catch (error) {
             lastError = error;
             logger.debug(`${fieldName} intento ${attempt}/${retries}: ${error.message}`);
+            logger.warn("[input] failed", {
+                key: fieldName,
+                attempt,
+                elapsedSeconds: elapsedSecondsSince(attemptStartTime),
+                steps: stepTimings,
+                error: error.message,
+            });
 
             if (attempt < retries) {
                 await page.waitForTimeout(700);
