@@ -46,6 +46,10 @@ function isBrowserClosedError(error) {
     return /browser.*closed|browser.*disconnected|target.*closed|context.*closed|has been closed/i.test(error.message || "");
 }
 
+function isNavigationAbortError(error) {
+    return /net::ERR_ABORTED|frame detached|navigation.*interrupted|execution context.*destroyed|target.*closed|page.*closed|context.*closed|has been closed/i.test(error.message || "");
+}
+
 function createNonRetryableError(message) {
     const error = new Error(message);
     error.retryable = false;
@@ -102,6 +106,110 @@ async function detectActivePopupSession(page) {
     return body.includes(ACTIVE_POPUP_SESSION_TEXT);
 }
 
+function getPageUrl(page) {
+    try {
+        return page && !page.isClosed() ? page.url() : "";
+    } catch {
+        return "";
+    }
+}
+
+async function waitForPageSettled(page, timeout = 30000) {
+    if (!page || page.isClosed()) {
+        throw new Error("Page cerrada antes de esperar carga.");
+    }
+
+    await page.waitForLoadState("domcontentloaded", { timeout });
+    await page.waitForLoadState("networkidle", { timeout: Math.min(timeout, 10000) }).catch(() => {});
+}
+
+async function recreatePageFrom(page, fallbackUrl, reason) {
+    const context = page?.context?.();
+    const targetUrl = getPageUrl(page) || fallbackUrl;
+
+    if (!context) {
+        throw new Error(`No se pudo recrear page: context no disponible. Motivo: ${reason}`);
+    }
+
+    logger.warn(`Recreando page despues de fallo de navegacion: ${reason}`);
+
+    if (page && !page.isClosed()) {
+        await page.close().catch(() => {});
+    }
+
+    try {
+        const nextPage = await context.newPage();
+
+        if (targetUrl) {
+            await nextPage.goto(targetUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
+            await waitForPageSettled(nextPage, 30000).catch(() => {});
+        }
+
+        return nextPage;
+    } catch (error) {
+        if (isBrowserClosedError(error) || isNavigationAbortError(error)) {
+            await BrowserManager.restart();
+            const browser = await BrowserManager.getBrowser();
+            const nextContext = await browser.newContext({ viewport: { width: 1366, height: 900 } });
+            const nextPage = await nextContext.newPage();
+
+            if (targetUrl) {
+                await nextPage.goto(targetUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
+                await waitForPageSettled(nextPage, 30000).catch(() => {});
+            }
+
+            return nextPage;
+        }
+
+        throw error;
+    }
+}
+
+async function resilientRefreshPage(page, {
+    label = "page",
+    fallbackUrl = "",
+    attempts = 2,
+    waitAfterMs = 800,
+} = {}) {
+    let currentPage = page;
+    let lastError = null;
+
+    for (let attempt = 1; attempt <= attempts; attempt += 1) {
+        if (!currentPage || currentPage.isClosed()) {
+            return recreatePageFrom(currentPage || page, fallbackUrl, `${label} cerrada antes de refresh`);
+        }
+
+        try {
+            await currentPage.waitForTimeout(waitAfterMs).catch(() => {});
+            await currentPage.waitForLoadState("domcontentloaded", { timeout: 10000 }).catch(() => {});
+
+            const currentUrl = getPageUrl(currentPage) || fallbackUrl;
+            if (!currentUrl) {
+                throw new Error(`No hay URL disponible para refrescar ${label}.`);
+            }
+
+            logger.debug(`Refrescando ${label} con goto resiliente. Intento ${attempt}/${attempts}.`);
+            await currentPage.goto(currentUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
+            await waitForPageSettled(currentPage, 30000);
+            return currentPage;
+        } catch (error) {
+            lastError = error;
+            logger.warn(`Refresh resiliente fallo en ${label} intento ${attempt}/${attempts}: ${error.message}`);
+
+            if (!isNavigationAbortError(error) && !isBrowserClosedError(error) && attempt < attempts) {
+                await currentPage.waitForTimeout(1000).catch(() => {});
+                continue;
+            }
+
+            if (attempt < attempts) {
+                await currentPage.waitForTimeout(1000).catch(() => {});
+            }
+        }
+    }
+
+    return recreatePageFrom(currentPage || page, fallbackUrl, lastError?.message || `${label} no pudo refrescarse`);
+}
+
 async function prepareFullQuoteScreenshot(popup) {
     await popup.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
 
@@ -149,25 +257,30 @@ async function prepareFullQuoteScreenshot(popup) {
 
 async function waitForValidQuoteScreen(popup, timeout = 45000) {
     const start = Date.now();
-    let reloads = 0;
-    const maxReloads = 3;
+    let refreshes = 0;
+    const maxRefreshes = 3;
     const validationsPerCycle = 3;
+    let currentPopup = popup;
 
     while (Date.now() - start < timeout) {
         let lastFailures = [];
 
         for (let attempt = 1; attempt <= validationsPerCycle; attempt += 1) {
-            await popup.waitForTimeout(700);
             const failures = [];
 
             try {
-                validateSession(popup);
+                if (!currentPopup || currentPopup.isClosed()) {
+                    throw new Error("Popup cerrado durante validacion.");
+                }
 
-                if (!popup.url().includes("cotizador")) {
+                await currentPopup.waitForTimeout(700);
+                validateSession(currentPopup);
+
+                if (!currentPopup.url().includes("cotizador")) {
                     failures.push("url");
                 }
 
-                const body = await getLowerBodyText(popup, 2000);
+                const body = await getLowerBodyText(currentPopup, 2000);
                 if (!body) {
                     failures.push("body");
                 }
@@ -181,7 +294,7 @@ async function waitForValidQuoteScreen(popup, timeout = 45000) {
                 }
 
                 try {
-                    const logo = popup.locator("#header-logo").first();
+                    const logo = currentPopup.locator("#header-logo").first();
                     const count = await logo.count();
                     if (count === 0 || !(await logo.isVisible())) {
                         failures.push("logo");
@@ -191,7 +304,7 @@ async function waitForValidQuoteScreen(popup, timeout = 45000) {
                 }
 
                 try {
-                    const cotit = popup.locator('img[name="Cotit"]').first();
+                    const cotit = currentPopup.locator('img[name="Cotit"]').first();
                     const count = await cotit.count();
                     if (count > 0 && (await cotit.isVisible())) {
                         failures.push("cotit");
@@ -205,7 +318,7 @@ async function waitForValidQuoteScreen(popup, timeout = 45000) {
                 }
 
                 try {
-                    const field = popup.locator(TIPO_PERSONA_SELECTOR).first();
+                    const field = currentPopup.locator(TIPO_PERSONA_SELECTOR).first();
                     const value = await field.inputValue();
 
                     if (!(await field.isVisible())) {
@@ -224,7 +337,7 @@ async function waitForValidQuoteScreen(popup, timeout = 45000) {
                 }
 
                 if (failures.length === 0) {
-                    return;
+                    return currentPopup;
                 }
 
                 lastFailures = [...failures];
@@ -235,14 +348,17 @@ async function waitForValidQuoteScreen(popup, timeout = 45000) {
             }
         }
 
-        if (reloads < maxReloads) {
-            reloads += 1;
-            logger.warn(`Pantalla invalida. Reload ${reloads}/${maxReloads}`, { failures: lastFailures });
-            await popup.reload({ waitUntil: "domcontentloaded", timeout: 30000 });
+        if (refreshes < maxRefreshes) {
+            refreshes += 1;
+            logger.warn(`Pantalla invalida. Refresh resiliente ${refreshes}/${maxRefreshes}`, { failures: lastFailures });
+            currentPopup = await resilientRefreshPage(currentPopup, {
+                label: "popup cotizador",
+                fallbackUrl: LOGIN_URL,
+            });
             continue;
         }
 
-        throw new Error(`Pantalla incorrecta tras varios reloads: ${JSON.stringify(lastFailures)}`);
+        throw new Error(`Pantalla incorrecta tras varios refreshes: ${JSON.stringify(lastFailures)}`);
     }
 
     throw new Error("Timeout esperando pantalla correcta.");
@@ -339,25 +455,27 @@ async function closeQuoteSession(popup) {
 }
 
 async function performLogin(page) {
+    let loginPage = page;
+
     logger.debug("Abriendo login...");
-    await page.goto(LOGIN_URL, { timeout: 30000 });
-    validateSession(page);
+    await loginPage.goto(LOGIN_URL, { timeout: 30000 });
+    validateSession(loginPage);
 
     logger.debug("Ingresando usuario...");
-    await page.fill('input[name="userName"]', USUARIO);
+    await loginPage.fill('input[name="userName"]', USUARIO);
 
     logger.debug("Click primer ingresar...");
-    await page.locator("#btnEntrar").click();
-    validateSession(page);
+    await loginPage.locator("#btnEntrar").click();
+    validateSession(loginPage);
 
     logger.debug("Ingresando password...");
-    await page.fill('input[name="userPassword"]', PASSWORD);
+    await loginPage.fill('input[name="userPassword"]', PASSWORD);
 
     logger.debug("Click segundo ingresar y esperando popup...");
-    const popup = await waitForQuotePopupAfterPassword(page);
+    let popup = await waitForQuotePopupAfterPassword(loginPage);
 
     await popup.waitForLoadState("domcontentloaded", { timeout: 30000 });
-    await waitForValidQuoteScreen(popup, 40000);
+    popup = await waitForValidQuoteScreen(popup, 40000);
     validateSession(popup);
 
     if (!popup.url().includes("cotizador")) {
@@ -368,7 +486,7 @@ async function performLogin(page) {
 }
 
 async function waitForQuotePopupAfterPassword(page) {
-    const context = page.context();
+    let context = page.context();
     const pagesBeforeClick = new Set(context.pages());
     const popupPromise = page.waitForEvent("popup", { timeout: POPUP_TIMEOUT_MS }).catch(() => null);
     const pagePromise = context.waitForEvent("page", { timeout: POPUP_TIMEOUT_MS }).catch(() => null);
@@ -376,32 +494,36 @@ async function waitForQuotePopupAfterPassword(page) {
     await page.locator("#btnEntrar").click();
     logger.debug(`Esperando ${SESSION_LOAD_WAIT_MS}ms a que cargue la sesion...`);
     await page.waitForTimeout(SESSION_LOAD_WAIT_MS);
-    logger.debug("Recargando pagina despues de iniciar sesion...");
-    await page.reload({ waitUntil: "domcontentloaded", timeout: 30000 });
+    logger.debug("Refrescando pagina despues de iniciar sesion...");
+    const loginPage = await resilientRefreshPage(page, {
+        label: "login despues de iniciar sesion",
+        fallbackUrl: LOGIN_URL,
+    });
+    context = loginPage.context();
 
     const popup = await Promise.race([
         popupPromise,
         pagePromise,
-        waitForActivePopupMessage(page),
+        waitForActivePopupMessage(loginPage),
     ]);
 
     if (popup) {
         return popup;
     }
 
-    const quotePage = findAvailableQuotePage(context, page, pagesBeforeClick);
+    const quotePage = findAvailableQuotePage(context, loginPage, pagesBeforeClick);
 
     if (quotePage) {
         return quotePage;
     }
 
-    if (await detectActivePopupSession(page)) {
-        return reopenQuotePopup(page, pagesBeforeClick);
+    if (await detectActivePopupSession(loginPage)) {
+        return reopenQuotePopup(loginPage, pagesBeforeClick);
     }
 
     logger.warn(`No se abrio popup de cotizador en ${POPUP_TIMEOUT_MS}ms. Intentando abrirlo sin marcar error.`);
 
-    const openedPopup = await openQuotePopupIfAvailable(page, pagesBeforeClick);
+    const openedPopup = await openQuotePopupIfAvailable(loginPage, pagesBeforeClick);
 
     if (openedPopup) {
         return openedPopup;
@@ -653,6 +775,7 @@ async function runCetelemFlowInContext({
         logger.debug(`Carpeta de videos: ${VIDEOS_DIR}`);
         const loginStartTime = performance.now();
         popup = await performLogin(page);
+        context = popup.context();
         const loginElapsedSeconds = elapsedSecondsSince(loginStartTime);
         popup.on("console", onConsole);
         registerDialogHandler(popup);
