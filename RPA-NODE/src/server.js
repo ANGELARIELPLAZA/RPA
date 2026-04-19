@@ -2,6 +2,8 @@ const fs = require("fs");
 const http = require("http");
 const path = require("path");
 const { runCetelemFlowWithRetries } = require("./cetelem/flow");
+const { getActiveContextCount, getPendingTaskCount } = require("./core/context-queue");
+const { getMemorySnapshot } = require("./core/task-logger");
 const { SCREENSHOTS_DIR } = require("./config");
 const { createJob, deleteExpiredJobs, getJob, serializeJob, updateJob } = require("./jobs/store");
 
@@ -27,7 +29,12 @@ function createApiServer() {
             }
 
             if (request.method === "GET" && (request.url === "/health" || request.url === "/healthz")) {
-                sendJson(response, 200, { ok: true });
+                sendJson(response, 200, {
+                    ok: true,
+                    activeContexts: getActiveContextCount(),
+                    queuedTasks: getPendingTaskCount(),
+                    memory: getMemorySnapshot(),
+                });
                 return;
             }
 
@@ -138,6 +145,8 @@ function createApiServer() {
 
 async function executeJob(taskId, payload) {
     updateJob(taskId, { status: "running", error: null });
+    const startedAt = performance.now();
+    console.log(`[task:${taskId}] Task recibida.`);
 
     try {
         const result = await runCetelemFlowWithRetries(payload, { taskId });
@@ -146,11 +155,13 @@ async function executeJob(taskId, payload) {
             result,
             error: null,
         });
+        console.log(`[task:${taskId}] Task completada en ${Number(((performance.now() - startedAt) / 1000).toFixed(2))}s.`);
     } catch (error) {
         updateJob(taskId, {
             status: "failed",
             error: error.message,
         });
+        console.error(`[task:${taskId}] Task fallida en ${Number(((performance.now() - startedAt) / 1000).toFixed(2))}s: ${error.message}`);
     }
 }
 

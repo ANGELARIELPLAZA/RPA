@@ -1,9 +1,10 @@
 const fs = require("fs");
 const path = require("path");
-const { chromium } = require("playwright");
+const BrowserManager = require("../core/browser-manager");
+const { enqueueContextTask } = require("../core/context-queue");
+const { logTask } = require("../core/task-logger");
 const {
     BAD_URL_TOKEN,
-    HEADLESS,
     LOGIN_URL,
     LOGS_DIR,
     MAX_REINTENTOS,
@@ -35,6 +36,10 @@ const DATA_FLOWS = {
     credito: fillCreditData,
     seguro: fillInsuranceData,
 };
+
+function isBrowserClosedError(error) {
+    return /browser.*closed|browser.*disconnected|target.*closed|context.*closed|has been closed/i.test(error.message || "");
+}
 
 function createTimestamp() {
     return new Date().toISOString().replace(/[-:]/g, "").replace(/\..+/, "").replace("T", "_");
@@ -224,14 +229,28 @@ async function waitForValidQuoteScreen(popup, timeout = 45000) {
 async function createBrowserSession() {
     assertCredentials();
 
-    const browser = await chromium.launch({ headless: HEADLESS });
-    const context = await browser.newContext({
-        recordVideo: { dir: VIDEOS_DIR },
-        viewport: { width: 1366, height: 900 },
-    });
-    const page = await context.newPage();
+    const browser = await BrowserManager.getBrowser();
+    let context = null;
 
-    return { browser, context, page };
+    try {
+        context = await browser.newContext({
+            recordVideo: { dir: VIDEOS_DIR },
+            viewport: { width: 1366, height: 900 },
+        });
+        const page = await context.newPage();
+
+        return { context, page };
+    } catch (error) {
+        if (context) {
+            await context.close().catch(() => {});
+        }
+
+        if (isBrowserClosedError(error)) {
+            await BrowserManager.restart();
+        }
+
+        throw error;
+    }
 }
 
 function buildTaskArtifactPath(taskId, suffix, extension) {
@@ -374,8 +393,30 @@ async function runCetelemFlow(payload, options = {}) {
     const consoleLogs = [];
     const startTime = performance.now();
 
-    const session = await createBrowserSession();
-    const { browser, context, page } = session;
+    logTask(taskId, "Esperando slot de context");
+
+    return enqueueContextTask(() => runCetelemFlowInContext({
+        payload,
+        taskId,
+        screenshotPath,
+        errorScreenshotPath,
+        consolePath,
+        consoleLogs,
+        startTime,
+    }));
+}
+
+async function runCetelemFlowInContext({
+    payload,
+    taskId,
+    screenshotPath,
+    errorScreenshotPath,
+    consolePath,
+    consoleLogs,
+    startTime,
+}) {
+    let context = null;
+    let page = null;
 
     let popup = null;
 
@@ -385,10 +426,17 @@ async function runCetelemFlow(payload, options = {}) {
         console.log("CONSOLE:", text);
     };
 
-    page.on("console", onConsole);
-    registerDialogHandler(page);
-
     try {
+        const session = await createBrowserSession();
+        context = session.context;
+        page = session.page;
+
+        page.on("console", onConsole);
+        registerDialogHandler(page);
+
+        logTask(taskId, "Context iniciado", {
+            elapsedSeconds: elapsedSecondsSince(startTime),
+        });
         console.log(`Carpeta de videos: ${VIDEOS_DIR}`);
         const loginStartTime = performance.now();
         popup = await performLogin(page);
@@ -459,8 +507,15 @@ async function runCetelemFlow(payload, options = {}) {
             vehicleTotalAmount,
         };
     } catch (error) {
+        if (isBrowserClosedError(error)) {
+            await BrowserManager.restart();
+        }
+
         try {
             const target = popup || page;
+            if (!target) {
+                throw new Error("No hay page disponible para screenshot de error");
+            }
             if (popup) {
                 await prepareFullQuoteScreenshot(popup).catch(() => {});
             }
@@ -483,11 +538,15 @@ async function runCetelemFlow(payload, options = {}) {
 
         throw error;
     } finally {
+        logTask(taskId, "Cerrando context", {
+            elapsedSeconds: elapsedSecondsSince(startTime),
+        });
+
         let pageVideo = null;
         let popupVideo = null;
 
         try {
-            pageVideo = await page.video()?.path();
+            pageVideo = page ? await page.video()?.path() : null;
         } catch {
             // no-op
         }
@@ -508,19 +567,29 @@ async function runCetelemFlow(payload, options = {}) {
         }
 
         try {
-            await page.close();
+            if (page) {
+                await page.close();
+            }
         } catch {
             // no-op
         }
 
-        await context.close();
-        await browser.close();
+        try {
+            if (context) {
+                await context.close();
+            }
+        } catch (error) {
+            console.warn(`[task:${taskId || "cli"}] No se pudo cerrar context: ${error.message}`);
+        }
 
         const taskPageVideo = moveArtifact(pageVideo, buildTaskArtifactPath(taskId, "page", "webm"));
         const taskPopupVideo = moveArtifact(popupVideo, buildTaskArtifactPath(taskId, "popup", "webm"));
 
         console.log(`Video page: ${taskPageVideo || pageVideo || "N/A"}`);
         console.log(`Video popup: ${taskPopupVideo || popupVideo || "N/A"}`);
+        logTask(taskId, "Context cerrado", {
+            elapsedSeconds: elapsedSecondsSince(startTime),
+        });
     }
 }
 

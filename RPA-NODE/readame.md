@@ -3,9 +3,40 @@ Proyecto Node.js/Playwright.
 npm install
 npm start
 
+Arquitectura Playwright:
+
+```text
+src/
+  core/
+    browser-manager.js   Browser global singleton
+    context-queue.js     Cola con maximo 3 BrowserContext simultaneos
+    task-logger.js       Logs por task_id, contexts activos y memoria
+  cetelem/
+    flow.js              Flujo RPA; crea/cierra solo BrowserContext
+    form.js              Llenado y lectura de campos
+    fields.js            Definicion de campos
+  jobs/
+    store.js             Estado en memoria de tasks async
+  config.js
+  server.js
+main.js
+```
+
+Variables recomendadas:
+
+```env
+HEADLESS=true
+PORT=3000
+HOST=0.0.0.0
+MAX_REINTENTOS=3
+MAX_CONTEXTS=3
+```
+
 Salud:
 GET /health
 GET /healthz
+
+La respuesta de salud incluye `activeContexts`, `queuedTasks` y memoria del proceso.
 
 Endpoint:
 POST /cotizar-cetelem-async

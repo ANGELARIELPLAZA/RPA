@@ -12,6 +12,7 @@ const HEADLESS = (process.env.HEADLESS || "true").toLowerCase() === "true";
 const SERVER_PORT = Number(process.env.PORT || 3000);
 const SERVER_HOST = process.env.HOST || "0.0.0.0";
 const MAX_REINTENTOS = Number(process.env.MAX_REINTENTOS || 3);
+const MAX_CONTEXTS = Number(process.env.MAX_CONTEXTS || 3);
 const LOGIN_URL = process.env.CETELEM_LOGIN_URL || "https://cck.creditoclick.com.mx/users-web/auth/kia/login?w=true";
 const BAD_URL_TOKEN = "josso_security_check";
 const TIPO_PERSONA_SELECTOR = "#customerType";
@@ -57,6 +58,7 @@ module.exports = {
     HEADLESS,
     LOGIN_URL,
     LOGS_DIR,
+    MAX_CONTEXTS,
     MAX_REINTENTOS,
     PASSWORD,
     SCREENSHOTS_DIR,
