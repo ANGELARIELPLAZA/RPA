@@ -193,6 +193,7 @@ async function gotoAndSettle(page, url, label, timeout = 30000) {
         if (status === 502) {
             logger.warn(`[nav:${label}] portal devolvio 502 Bad Gateway`, { url });
             await captureDiagnosticScreenshot(page, "bad_gateway").catch(() => {});
+            throw createNonRetryableError("Portal devolvio 502 Bad Gateway (nginx). Abortando task.");
         } else if (status && status >= 500) {
             logger.warn(`[nav:${label}] portal devolvio error ${status}`, { url });
         }
@@ -594,8 +595,8 @@ async function waitForValidQuoteScreen(popup, timeout = 45000) {
 
                 const normalizedBody = await getNormalizedBodyText(currentPopup, 1500);
                 if (isBadGatewayBody(normalizedBody)) {
-                    failures.push("bad_gateway_502");
                     await captureDiagnosticScreenshot(currentPopup, "bad_gateway").catch(() => {});
+                    throw createNonRetryableError("Portal en 502 Bad Gateway (nginx). Abortando task.");
                 }
 
                 const overlay = await detectBlockingOverlay(currentPopup);
