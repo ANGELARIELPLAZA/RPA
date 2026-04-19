@@ -1,6 +1,9 @@
 const { CLIENTE_BASE_FIELDS, CLIENTE_FIELDS_BY_TYPE, CREDITO_FIELDS, SEGURO_FIELDS, VEHICULO_FIELDS } = require("./fields");
 const logger = require("../core/logger");
 
+const FLOW_SECTION_TIMEOUT_MS = 300000;
+const FIELD_STEP_MAX_TIMEOUT_MS = 180000;
+
 const INSURANCE_CARRIER_ALIASES = {
     CHUBB: "ABA",
     ABA: "ABA",
@@ -34,6 +37,58 @@ function parseMoneyValue(value) {
 
     const amount = Number(normalized);
     return Number.isFinite(amount) ? amount : null;
+}
+
+function elapsedSecondsSince(startTime) {
+    return Number(((performance.now() - startTime) / 1000).toFixed(2));
+}
+
+function maskLogValue(value) {
+    if (value === undefined) {
+        return undefined;
+    }
+
+    if (value === null) {
+        return null;
+    }
+
+    const raw = String(value);
+    const trimmed = raw.trim();
+
+    if (!trimmed) {
+        return "";
+    }
+
+    if (trimmed.length <= 4) {
+        return "****";
+    }
+
+    return `${trimmed.slice(0, 2)}***${trimmed.slice(-2)}`;
+}
+
+function buildFieldTimeout(field) {
+    const timeout = field.timeout ?? 15000;
+    const retries = field.retries ?? 3;
+    const budget = timeout * Math.max(1, retries) + 7000;
+    return Math.min(Math.max(15000, budget), FIELD_STEP_MAX_TIMEOUT_MS);
+}
+
+async function runWithTimeout(label, action, timeoutMs) {
+    const startTime = performance.now();
+    logger.info(`[substep:${label}] start`, { timeoutMs });
+
+    try {
+        const result = await Promise.race([
+            Promise.resolve().then(action),
+            new Promise((_, reject) => setTimeout(() => reject(new Error(`Timeout en substep "${label}" tras ${timeoutMs}ms`)), timeoutMs)),
+        ]);
+
+        logger.info(`[substep:${label}] end`, { elapsedSeconds: elapsedSecondsSince(startTime) });
+        return result;
+    } catch (error) {
+        logger.warn(`[substep:${label}] failed`, { elapsedSeconds: elapsedSecondsSince(startTime), error: error.message });
+        throw error;
+    }
 }
 
 async function resolveFieldSelector(page, field) {
@@ -250,55 +305,84 @@ async function applyFieldSet(page, source, fields) {
         }
 
         const value = field.transform ? field.transform(rawValue) : rawValue;
+        const fieldTimeoutMs = buildFieldTimeout(field);
+        const stepStartTime = performance.now();
+        logger.info("[field] start", {
+            key: field.key,
+            type: field.type,
+            timeoutMs: fieldTimeoutMs,
+            value: field.type === "input" ? maskLogValue(value) : String(value).trim(),
+        });
 
-        if (field.type === "select") {
-            const selector = await resolveFieldSelector(page, field);
-            await selectAndVerify(page, selector, value, {
-                fieldName: field.key,
-                retries: field.retries,
-                timeout: field.timeout,
-                settleMs: 300,
-            });
-            continue;
-        }
-
-        if (field.type === "input") {
-            const selector = await resolveFieldSelector(page, field);
-
-            if (field.skipIfHidden && !(await isFieldVisible(page, selector, 2000))) {
-                logger.warn(`Campo ${field.key} omitido porque existe oculto o no visible. selector=${selector}`);
+        try {
+            if (field.type === "select") {
+                await runWithTimeout(`field:${field.key}`, async () => {
+                    const selector = await resolveFieldSelector(page, field);
+                    await selectAndVerify(page, selector, value, {
+                        fieldName: field.key,
+                        retries: field.retries,
+                        timeout: field.timeout,
+                        settleMs: 300,
+                    });
+                }, fieldTimeoutMs);
+                logger.info("[field] end", { key: field.key, elapsedSeconds: elapsedSecondsSince(stepStartTime) });
                 continue;
             }
 
-            await fillAndVerify(page, selector, value, {
-                fieldName: field.key,
-                retries: field.retries,
-                timeout: field.timeout,
-                settleMs: 400,
-            });
-            continue;
-        }
+            if (field.type === "input") {
+                await runWithTimeout(`field:${field.key}`, async () => {
+                    const selector = await resolveFieldSelector(page, field);
 
-        if (field.type === "checkbox") {
-            const selector = await resolveFieldSelector(page, field);
-            await setCheckboxValue(page, selector, value, {
-                fieldName: field.key,
-                retries: field.retries,
-                timeout: field.timeout,
-            });
-            continue;
-        }
+                    if (field.skipIfHidden && !(await isFieldVisible(page, selector, 2000))) {
+                        logger.warn(`Campo ${field.key} omitido porque existe oculto o no visible. selector=${selector}`);
+                        return;
+                    }
 
-        if (field.type === "radio") {
-            await setRadioValue(page, field.radioName, value, {
-                fieldName: field.key,
-                retries: field.retries,
-                timeout: field.timeout,
-            });
-            continue;
-        }
+                    await fillAndVerify(page, selector, value, {
+                        fieldName: field.key,
+                        retries: field.retries,
+                        timeout: field.timeout,
+                        settleMs: 400,
+                    });
+                }, fieldTimeoutMs);
+                logger.info("[field] end", { key: field.key, elapsedSeconds: elapsedSecondsSince(stepStartTime) });
+                continue;
+            }
 
-        throw new Error(`Tipo de campo no soportado: ${field.type}`);
+            if (field.type === "checkbox") {
+                await runWithTimeout(`field:${field.key}`, async () => {
+                    const selector = await resolveFieldSelector(page, field);
+                    await setCheckboxValue(page, selector, value, {
+                        fieldName: field.key,
+                        retries: field.retries,
+                        timeout: field.timeout,
+                    });
+                }, fieldTimeoutMs);
+                logger.info("[field] end", { key: field.key, elapsedSeconds: elapsedSecondsSince(stepStartTime) });
+                continue;
+            }
+
+            if (field.type === "radio") {
+                await runWithTimeout(`field:${field.key}`, async () => {
+                    await setRadioValue(page, field.radioName, value, {
+                        fieldName: field.key,
+                        retries: field.retries,
+                        timeout: field.timeout,
+                    });
+                }, fieldTimeoutMs);
+                logger.info("[field] end", { key: field.key, elapsedSeconds: elapsedSecondsSince(stepStartTime) });
+                continue;
+            }
+
+            throw new Error(`Tipo de campo no soportado: ${field.type}`);
+        } catch (error) {
+            logger.warn("[field] failed", {
+                key: field.key,
+                elapsedSeconds: elapsedSecondsSince(stepStartTime),
+                error: error.message,
+            });
+            throw error;
+        }
     }
 }
 
@@ -404,9 +488,15 @@ async function fillClientData(page, payload) {
         throw new Error(`customerType no soportado: ${customerType}`);
     }
 
-    await applyFieldSet(page, cliente, CLIENTE_BASE_FIELDS);
+    await runWithTimeout("cliente-base-fields", async () => {
+        await applyFieldSet(page, cliente, CLIENTE_BASE_FIELDS);
+    }, FLOW_SECTION_TIMEOUT_MS);
+
     await page.waitForTimeout(800);
-    await applyFieldSet(page, cliente, fieldsByType);
+
+    await runWithTimeout(`cliente-fields-type-${customerType}`, async () => {
+        await applyFieldSet(page, cliente, fieldsByType);
+    }, FLOW_SECTION_TIMEOUT_MS);
 }
 
 async function fillVehicleData(page, payload) {
@@ -420,7 +510,9 @@ async function fillVehicleData(page, payload) {
         throw new Error("El objeto vehiculo debe ser un JSON valido");
     }
 
-    await applyFieldSet(page, vehiculo, VEHICULO_FIELDS);
+    await runWithTimeout("vehiculo-fields", async () => {
+        await applyFieldSet(page, vehiculo, VEHICULO_FIELDS);
+    }, FLOW_SECTION_TIMEOUT_MS);
 }
 
 async function fillCreditData(page, payload) {

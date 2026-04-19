@@ -67,7 +67,7 @@ function createNonRetryableError(message) {
 }
 
 function createPortalUnavailableError(statusCode, url) {
-    const error = createNonRetryableError(`Portal no disponible: ${statusCode} Bad Gateway (nginx).`);
+    const error = createNonRetryableError(`Portal CETELEM no disponible: ${statusCode} Bad Gateway (nginx).`);
     error.code = "PORTAL_BAD_GATEWAY_502";
     error.portalStatus = statusCode;
     error.portalUrl = url || null;
@@ -1146,7 +1146,7 @@ async function runCetelemFlowInContext({
         const { flows: executedFlows, timings: flowTimings } = await runStep("run-data-flows", popup, async () => (
             runRequestedDataFlows(popup, payload)
         ), {
-            timeoutMs: 180000,
+            timeoutMs: 300000,
             meta: { flowsRequested: normalizeRequestedDataFlows(payload) },
         });
         const stageTimings = [
