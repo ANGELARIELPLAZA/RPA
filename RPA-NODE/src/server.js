@@ -18,7 +18,19 @@ function createApiServer() {
                 const payload = normalizeCetelemPayload(await readJsonBody(request));
                 const job = createJob(payload);
 
-                void executeJob(job.id, payload);
+                void executeJob(job.id, payload).catch((error) => {
+                    logger.error(`[task ${shortTaskId(job.id)}] executeJob fallo de forma no controlada: ${error.message}`);
+                    updateJob(job.id, {
+                        status: "failed",
+                        error: error.message,
+                        result: {
+                            consolePath: null,
+                            elapsedSeconds: null,
+                            errorScreenshot: false,
+                            screenshotPath: null,
+                        },
+                    });
+                });
 
                 sendJson(response, 202, {
                     task_id: job.id,
