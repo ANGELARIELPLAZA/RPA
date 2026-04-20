@@ -15,6 +15,10 @@ function normalizeVehiculo(value) {
         vehiculo.insuranceVehicleUse = vehiculo.uso_vehicular;
     }
 
+    if (vehiculo.vehicleBrand === undefined && vehiculo.marca !== undefined) {
+        vehiculo.vehicleBrand = vehiculo.marca;
+    }
+
     return vehiculo;
 }
 
@@ -59,6 +63,7 @@ function normalizeFormatoB(body) {
         "uso_vehicular",
         "tipoCarga",
         "servicio",
+        "marca",
         "vehicleBrand",
         "vehicleAnio",
         "vehicleModel",
