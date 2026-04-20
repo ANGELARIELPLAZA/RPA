@@ -29,6 +29,33 @@ function computeElapsedMs(task) {
     return Math.max(0, end - start);
 }
 
+function normalizeNivelDetalleFromTask(task) {
+    const raw = String(task?.payload_normalizado?.nivel_detalle ?? task?.payload_normalizado?.nivelDetalle ?? "").trim().toLowerCase();
+    if (raw) return raw;
+    return String(task?.payload_original?.nivel_detalle ?? task?.payload_original?.nivelDetalle ?? "").trim().toLowerCase();
+}
+
+function parseMoney(value) {
+    const raw = String(value ?? "").trim();
+    if (!raw) return null;
+    const cleaned = raw.replace(/[$\s]/g, "").replace(/,/g, "");
+    const num = Number.parseFloat(cleaned.replace(/[^\d.-]/g, ""));
+    return Number.isFinite(num) ? num : null;
+}
+
+function mapPrimasSegurosFromResult(result) {
+    if (!Array.isArray(result)) return null;
+    return result
+        .filter((x) => x && typeof x === "object")
+        .map((x) => ({
+            aseguradora: String(x.aseguradora ?? "").trim(),
+            monto: parseMoney(x.monto),
+            anualidad_requerida: true,
+            rango_anualidad: { minimo: null, maximo: null },
+        }))
+        .filter((x) => x.aseguradora && x.monto !== null);
+}
+
 function toPublicStatus(task, { includePayload = false, includeScreenshotBase64 = true } = {}) {
     const elapsedMs = computeElapsedMs(task);
     const fechaMs =
@@ -56,13 +83,20 @@ function toPublicStatus(task, { includePayload = false, includeScreenshotBase64 
         }
     }
 
+    const nivelDetalle = normalizeNivelDetalleFromTask(task);
+    const primas_seguros =
+        nivelDetalle === "seguros"
+            ? mapPrimasSegurosFromResult(task.result)
+            : null;
+
     return {
         task_id: task.task_id,
         status: task.status,
         ...(fechaEjecucion ? { fecha_ejecucion: fechaEjecucion } : {}),
         ...(fechaMs ? { fecha_ejecucion_ms: fechaMs } : {}),
         tiempo_transcurrido: formatShortDuration(elapsedMs),
-        result: task.result ?? null,
+        result: primas_seguros ? null : task.result ?? null,
+        ...(primas_seguros ? { primas_seguros } : {}),
         etapa_nombre: task.etapa_nombre,
         etapa_numero: task.etapa_numero,
         ...(task.detalle ? { detalle: task.detalle } : {}),
