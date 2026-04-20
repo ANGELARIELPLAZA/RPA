@@ -728,21 +728,51 @@ async function fillCreditData(page, payload) {
 
     const hasDepositPercent = !isEmptyValue(credito.creditDepositPercent);
     const hasDepositAmount = !isEmptyValue(credito.creditDepositAmount);
-    const shouldUseDepositAmount = !hasDepositPercent && hasDepositAmount;
+
+    const depositMode = hasDepositPercent
+        ? "percent"
+        : hasDepositAmount
+            ? "amount"
+            : "none";
+
+    if (hasDepositPercent && hasDepositAmount) {
+        logger.warn("[credito] payload trae percent y amount; se prioriza percent y se omite amount", {
+            creditDepositPercent: maskLogValue(credito.creditDepositPercent),
+            creditDepositAmount: maskLogValue(credito.creditDepositAmount),
+        });
+    }
+
+    logger.info("[credito] deposit mode", {
+        mode: depositMode,
+        hasPercent: hasDepositPercent,
+        hasAmount: hasDepositAmount,
+    });
+
+    const creditoToFill = { ...credito };
+
+    if (depositMode === "percent") {
+        delete creditoToFill.creditDepositAmount;
+    } else if (depositMode === "amount") {
+        delete creditoToFill.creditDepositPercent;
+    } else {
+        delete creditoToFill.creditDepositPercent;
+        delete creditoToFill.creditDepositAmount;
+    }
+
     const fields = CREDITO_FIELDS.filter((field) => {
         if (field.key === "creditDepositPercent") {
-            return hasDepositPercent;
+            return depositMode === "percent";
         }
 
         if (field.key === "creditDepositAmount") {
-            return shouldUseDepositAmount;
+            return depositMode === "amount";
         }
 
         return true;
     });
 
-    logger.debug(`Campos de credito a llenar: ${fields.map((field) => field.key).join(", ") || "ninguno"}`);
-    await applyFieldSet(page, credito, fields);
+    logger.info("[credito] fields", { keys: fields.map((field) => field.key) });
+    await applyFieldSet(page, creditoToFill, fields);
     await assertNoCreditDepositMinimumError(page);
 }
 
