@@ -592,6 +592,15 @@ async function etapaAbrirCotizador(popup) {
         await popup.keyboard.press("Enter").catch(() => { });
         await popup.waitForTimeout(500);
     }
+
+    // Forzar ubicarse en el breadcrumb "COTIZACIÓN" (paso 1) para asegurar que el formulario se habilite.
+    await esperarOverlayCarga(popup, { timeout: 30000 });
+    const breadcrumb = popup.locator("#18n_breadcrumbs_quote").first();
+    await breadcrumb.waitFor({ state: "visible", timeout: 30000 });
+    await breadcrumb.scrollIntoViewIfNeeded().catch(() => { });
+    await breadcrumb.click({ timeout: 30000 });
+    await esperarOverlayCarga(popup, { timeout: 30000 });
+    await popup.waitForTimeout(800);
 }
 
 /* =========================
@@ -600,24 +609,15 @@ async function etapaAbrirCotizador(popup) {
 async function etapaCliente(popup, data) {
     const c = data?.cliente || {};
 
-    if (empty(c.customerType)) {
-        throw new Error("Falta campo requerido: customerType");
-    }
+    //const opcionesOk = await esperarOpcionesORecargar(popup, "#customerType", { timeout: 8000, maxReloads: 2 });
 
-    const opcionesOk = await esperarOpcionesORecargar(popup, "#customerType", { timeout: 8000, maxReloads: 2 });
-    if (!opcionesOk) {
-        throw new Error("No cargaron opciones para #customerType después de recargar la página");
-    }
     await esperarYSeleccionar(popup, "#customerType", c.customerType, 60000);
     await esperarYSeleccionar(popup, "#genero", c.genero);
     await esperarYSeleccionar(popup, "#customerTitle", c.customerTitle);
 
     await esperarYLlenarUpper(popup, "#customerName", c.customerName);
     await esperarYLlenarUpper(popup, "#customerAPaterno", c.customerAPaterno);
-
-    if (!empty(c.customerAMaterno)) {
-        await esperarYLlenarUpper(popup, "#customerAMaterno", c.customerAMaterno);
-    }
+    await esperarYLlenarUpper(popup, "#customerAMaterno", c.customerAMaterno);
 
     await fillBirthDateMasked(popup, "#customerBirthDate", c.customerBirthDate);
     await popup.waitForTimeout(1000);
