@@ -717,6 +717,8 @@ async function etapaCredito(popup, data) {
 ========================= */
 async function etapaSeguro(popup, data) {
     const s = data?.seguro || {};
+    const nivelDetalle = normalizeString(data?.nivel_detalle ?? data?.nivelDetalle).toLowerCase();
+    const soloListaAseguradoras = nivelDetalle === "seguros";
 
     await esperarYLlenar(popup, "#insuranceCP", s.insuranceCP);
     await popup.mouse.click(10, 10);
@@ -737,7 +739,7 @@ async function etapaSeguro(popup, data) {
         }
     );
 
-    if (empty(s.insuranceOption)) {
+    if (soloListaAseguradoras || empty(s.insuranceOption)) {
         return opcionesSeguro;
     }
 
@@ -795,7 +797,8 @@ async function runCetelemFlow(payload, hooks = {}) {
         popup.__rpaHooks = hooks;
 
         const nivelDetalle = normalizeString(data?.nivel_detalle ?? data?.nivelDetalle).toLowerCase();
-        const skipCliente = nivelDetalle === "seguros";
+        const isSeguros = nivelDetalle === "seguros";
+        const skipCliente = isSeguros;
 
         if (!skipCliente && data?.cliente && Object.keys(data.cliente).length) {
             await stage("cliente", async () => etapaCliente(popup, data));
@@ -808,12 +811,12 @@ async function runCetelemFlow(payload, hooks = {}) {
             });
         }
 
-        if (data?.credito && Object.keys(data.credito).length) {
+        if (!isSeguros && data?.credito && Object.keys(data.credito).length) {
             await stage("credito", async () => etapaCredito(popup, data));
         }
 
         let seguroResult = null;
-        if (data?.seguro && Object.keys(data.seguro).length) {
+        if (isSeguros || (data?.seguro && Object.keys(data.seguro).length)) {
             seguroResult = await stage("seguro", async () => etapaSeguro(popup, data));
         }
 

@@ -7,6 +7,17 @@ function normalizeNivelDetalle(value) {
     return raw ? raw.toLowerCase() : "";
 }
 
+function normalizeVehiculo(value) {
+    const vehiculo = isObject(value) ? { ...value } : {};
+
+    // Aliases comunes (payload externo)
+    if (vehiculo.insuranceVehicleUse === undefined && vehiculo.uso_vehicular !== undefined) {
+        vehiculo.insuranceVehicleUse = vehiculo.uso_vehicular;
+    }
+
+    return vehiculo;
+}
+
 function pick(obj, keys) {
     const out = {};
     for (const key of keys) {
@@ -21,7 +32,7 @@ function normalizeFormatoA(body) {
             ? { nivel_detalle: normalizeNivelDetalle(body.nivel_detalle ?? body.nivelDetalle) }
             : {}),
         cliente: isObject(body.cliente) ? body.cliente : {},
-        vehiculo: isObject(body.vehiculo) ? body.vehiculo : {},
+        vehiculo: normalizeVehiculo(body.vehiculo),
         credito: isObject(body.credito) ? body.credito : {},
         seguro: isObject(body.seguro) ? body.seguro : {},
     };
@@ -45,6 +56,7 @@ function normalizeFormatoB(body) {
         "vehicleType",
         "seminuevoCertificado",
         "insuranceVehicleUse",
+        "uso_vehicular",
         "tipoCarga",
         "servicio",
         "vehicleBrand",
@@ -78,7 +90,7 @@ function normalizeFormatoB(body) {
             ? { nivel_detalle: normalizeNivelDetalle(body.nivel_detalle ?? body.nivelDetalle) }
             : {}),
         cliente: pick(body, clienteKeys),
-        vehiculo: pick(body, vehiculoKeys),
+        vehiculo: normalizeVehiculo(pick(body, vehiculoKeys)),
         credito: pick(body, creditoKeys),
         seguro: pick(body, seguroKeys),
     };
