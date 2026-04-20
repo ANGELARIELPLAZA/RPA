@@ -7,10 +7,15 @@ function getStatus(req, res) {
         return res.status(404).json({ error: "task_id no encontrado" });
     }
 
-    return res.json(taskStore.toPublicStatus(task));
+    const includePayloadRaw = req.query.include_payload ?? req.query.payload ?? req.query.includePayload;
+    const includePayload =
+        includePayloadRaw === "1"
+        || includePayloadRaw === "true"
+        || includePayloadRaw === true;
+
+    return res.json(taskStore.toPublicStatus(task, { includePayload }));
 }
 
 module.exports = {
     getStatus,
 };
-

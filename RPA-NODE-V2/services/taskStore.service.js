@@ -29,7 +29,7 @@ function computeElapsedMs(task) {
     return Math.max(0, end - start);
 }
 
-function toPublicStatus(task) {
+function toPublicStatus(task, { includePayload = false } = {}) {
     const elapsedMs = computeElapsedMs(task);
     const fechaMs =
         typeof task.fecha_ejecucion === "number"
@@ -68,6 +68,12 @@ function toPublicStatus(task) {
         ...(task.detalle ? { detalle: task.detalle } : {}),
         ...(task.screenshot_url ? { screenshot_url: task.screenshot_url } : {}),
         ...(screenshotBase64 ? { screenshot: { base64: screenshotBase64 } } : {}),
+        ...(includePayload
+            ? {
+                payload_original: task.payload_original ?? null,
+                payload_normalizado: task.payload_normalizado ?? null,
+            }
+            : {}),
     };
 }
 
