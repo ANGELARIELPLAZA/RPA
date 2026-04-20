@@ -143,11 +143,15 @@ function normalizeCredito(value) {
         credito.creditDepositTerm = credito.plazo_credito;
     }
 
+    if (credito.creditDepositPercent === undefined && credito.enganche_porcentaje !== undefined) {
+        credito.creditDepositPercent = credito.enganche_porcentaje;
+    }
+
     if (credito.creditDepositAmount === undefined && credito.enganche_monto !== undefined) {
         credito.creditDepositAmount = credito.enganche_monto;
     }
 
-    for (const key of ["creditDepositAmount", "creditDepositPlan", "creditDepositTerm"]) {
+    for (const key of ["creditDepositPercent", "creditDepositAmount", "creditDepositPlan", "creditDepositTerm"]) {
         if (credito[key] !== undefined && credito[key] !== null) {
             credito[key] = String(credito[key]).trim();
         }
@@ -227,6 +231,8 @@ function normalizeFormatoB(body) {
     const creditoKeys = [
         "enganche_monto",
         "creditDepositAmount",
+        "enganche_porcentaje",
+        "creditDepositPercent",
         "plan_credito",
         "creditDepositPlan",
         "plazo_credito",

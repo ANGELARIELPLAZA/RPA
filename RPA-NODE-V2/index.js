@@ -647,7 +647,15 @@ async function etapaVehiculo(popup, data) {
     if (empty(v.vehicleModel)) throw new Error("Falta campo requerido: vehicleModel");
     if (empty(v.vehicleVersion)) throw new Error("Falta campo requerido: vehicleVersion");
 
+    // Si el primer select del vehículo tarda, recarga rápido para no quemar timeout largos.
+    const vehicleTypeOk = await esperarOpcionesORecargar(popup, "#vehicleType", { timeout: 3000, maxReloads: 1 });
+    if (!vehicleTypeOk) {
+        throw new Error("No cargaron opciones para #vehicleType después de recargar la página");
+    }
+
     await esperarYSeleccionar(popup, "#vehicleType", v.vehicleType);
+    await popup.mouse.click(10, 10).catch(() => { });
+    await popup.waitForTimeout(500);
     if (v.seminuevoCertificado === true) {
         await esperarYCheck(
             popup,
@@ -732,7 +740,12 @@ async function etapaRecuperarPrecioVehiculo(popup) {
 async function etapaCredito(popup, data) {
     const c = data?.credito || {};
 
-    if (!empty(c.creditDepositAmount)) {
+    // Enganche: usar solo uno (prioridad: porcentaje, luego monto)
+    if (!empty(c.creditDepositPercent)) {
+        await esperarYLlenar(popup, "#creditDepositPercent", c.creditDepositPercent);
+        await popup.mouse.click(10, 10);
+        await popup.waitForTimeout(1000);
+    } else if (!empty(c.creditDepositAmount)) {
         await esperarYLlenar(popup, "#creditDepositAmount", c.creditDepositAmount);
         await popup.mouse.click(10, 10);
         await popup.waitForTimeout(1000);
