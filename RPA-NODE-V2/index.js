@@ -563,6 +563,10 @@ async function etapaAbrirCotizador(popup) {
 async function etapaCliente(popup, data) {
     const c = data?.cliente || {};
 
+    if (empty(c.customerType)) {
+        throw new Error("Falta campo requerido: customerType");
+    }
+
     const opcionesOk = await esperarOpcionesORecargar(popup, "#customerType", { timeout: 8000, maxReloads: 2 });
     if (!opcionesOk) {
         throw new Error("No cargaron opciones para #customerType después de recargar la página");
@@ -770,7 +774,10 @@ async function runCetelemFlow(payload, hooks = {}) {
         page.__rpaHooks = hooks;
         popup.__rpaHooks = hooks;
 
-        if (data?.cliente && Object.keys(data.cliente).length) {
+        const nivelDetalle = normalizeString(data?.nivel_detalle ?? data?.nivelDetalle).toLowerCase();
+        const skipCliente = nivelDetalle === "seguros";
+
+        if (!skipCliente && data?.cliente && Object.keys(data.cliente).length) {
             await stage("cliente", async () => etapaCliente(popup, data));
         }
 

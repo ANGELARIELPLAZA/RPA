@@ -5,7 +5,7 @@ const ExecutionSchema = new mongoose.Schema(
         task_id: { type: String, required: true, unique: true, index: true },
         source_service: { type: String, default: "RPA-NODE-V2" },
 
-        status: { type: String, enum: ["en progreso", "completado", "fallido"], index: true, default: "en progreso" },
+        status: { type: String, enum: ["En progreso", "completado", "fallido"], index: true, default: "En progreso" },
         etapa_nombre: { type: String, index: true, default: "inicializando" },
         etapa_numero: { type: String, default: "0/0" },
         current_step: { type: Number, default: 0 },

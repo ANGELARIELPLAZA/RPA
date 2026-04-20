@@ -52,7 +52,7 @@ function toPublicStatus(task) {
 function createTask({ task_id, fecha_ejecucion, payload_original, payload_normalizado, total_steps }) {
     const task = {
         task_id,
-        status: "en progreso",
+        status: "En progreso",
         etapa_nombre: "inicializando",
         current_step: 0,
         total_steps: total_steps || 0,
@@ -146,7 +146,7 @@ function listRecentTasks(limit = 10) {
 
 function getMetrics() {
     const all = Array.from(tasks.values());
-    const active = all.filter((t) => t.status === "en progreso").length;
+    const active = all.filter((t) => t.status === "En progreso").length;
     const done = counters.completed;
     const fail = counters.failed;
 

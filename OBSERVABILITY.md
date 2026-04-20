@@ -30,7 +30,7 @@ Servicios opcionales:
 ## Dashboards sugeridos (Grafana)
 
 - Salud general: API up, portal up, robot libre/ocupado, activeContexts/queuedTasks
-- Tareas por status: en progreso / completadas / fallidas
+- Tareas por status: En progreso / completadas / fallidas
 - Duración: promedio y p95 por día
 - Fallas por etapa (top)
 - Últimas ejecuciones (tabla)

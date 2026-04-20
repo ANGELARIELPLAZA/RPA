@@ -10,7 +10,7 @@
 
 - Antes de crear `task_id`, el API hace `ping` al portal (`CETELEM_URL`).
 - Si el portal responde `502/503` o hay error de red/timeout, responde inmediato `status=fallido` y **no** crea tarea.
-- Si el portal está disponible, responde inmediato `status=en progreso` + `task_id` y ejecuta el robot en background (con cola por `MAX_CONTEXTS`).
+- Si el portal está disponible, responde inmediato `status=En progreso` + `task_id` y ejecuta el robot en background (con cola por `MAX_CONTEXTS`).
 - En error durante ejecución: toma screenshot y guarda **solo** `screenshot_url` público.
 
 ## Ejecutar local (Windows / Linux)
@@ -51,7 +51,7 @@ O con compose:
 ```json
 {
   "task_id": "uuid",
-  "status": "en progreso",
+  "status": "En progreso",
   "fecha_ejecucion": "2026-04-20 11:32:10"
 }
 ```
@@ -65,7 +65,7 @@ O con compose:
   "task_id": "uuid",
   "tiempo_transcurrido": "18s",
   "result": null,
-  "status": "en progreso",
+  "status": "En progreso",
   "etapa_nombre": "vehiculo",
   "etapa_numero": "2/4"
 }

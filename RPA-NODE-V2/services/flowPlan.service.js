@@ -9,7 +9,10 @@ function buildFlowStages(normalizedPayload) {
     // Nota: la validación del portal se hace ANTES de crear task_id (en el controller).
     stages.push({ name: "login" });
 
-    if (isNonEmptyObject(normalizedPayload?.cliente)) stages.push({ name: "cliente" });
+    const nivelDetalle = String(normalizedPayload?.nivel_detalle ?? normalizedPayload?.nivelDetalle ?? "").trim().toLowerCase();
+    const skipCliente = nivelDetalle === "seguros";
+
+    if (!skipCliente && isNonEmptyObject(normalizedPayload?.cliente)) stages.push({ name: "cliente" });
     if (isNonEmptyObject(normalizedPayload?.vehiculo)) stages.push({ name: "vehiculo" });
     if (isNonEmptyObject(normalizedPayload?.credito)) stages.push({ name: "credito" });
     if (isNonEmptyObject(normalizedPayload?.seguro)) stages.push({ name: "seguro" });

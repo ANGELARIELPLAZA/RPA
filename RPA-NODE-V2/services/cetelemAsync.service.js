@@ -78,7 +78,7 @@ async function executeTask(taskId, normalizedPayload, portalMeta) {
 
     taskStore.setStage(taskId, etapaNombre, currentStep, totalSteps);
     trackingClient.updateExecution(taskId, {
-        status: "en progreso",
+        status: "En progreso",
         etapa_nombre: etapaNombre,
         current_step: currentStep,
         total_steps: totalSteps,

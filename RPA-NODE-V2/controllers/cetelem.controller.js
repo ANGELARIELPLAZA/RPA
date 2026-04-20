@@ -64,7 +64,7 @@ async function cotizarCetelemAsync(req, res) {
     trackingClient.createExecution({
         task_id,
         source_service: "RPA-NODE-V2",
-        status: "en progreso",
+        status: "En progreso",
         etapa_nombre: "inicializando",
         etapa_numero: `0/${stages.length}`,
         current_step: 0,
@@ -92,7 +92,7 @@ async function cotizarCetelemAsync(req, res) {
     // 3) Respuesta inmediata
     res.status(202).json({
         task_id,
-        status: "en progreso",
+        status: "En progreso",
         fecha_ejecucion: formatDateTime(new Date(fecha_ejecucion)),
     });
 

@@ -2,6 +2,11 @@ function isObject(value) {
     return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
+function normalizeNivelDetalle(value) {
+    const raw = String(value ?? "").trim();
+    return raw ? raw.toLowerCase() : "";
+}
+
 function pick(obj, keys) {
     const out = {};
     for (const key of keys) {
@@ -12,6 +17,9 @@ function pick(obj, keys) {
 
 function normalizeFormatoA(body) {
     return {
+        ...(body.nivel_detalle !== undefined || body.nivelDetalle !== undefined
+            ? { nivel_detalle: normalizeNivelDetalle(body.nivel_detalle ?? body.nivelDetalle) }
+            : {}),
         cliente: isObject(body.cliente) ? body.cliente : {},
         vehiculo: isObject(body.vehiculo) ? body.vehiculo : {},
         credito: isObject(body.credito) ? body.credito : {},
@@ -66,6 +74,9 @@ function normalizeFormatoB(body) {
     ];
 
     return {
+        ...(body.nivel_detalle !== undefined || body.nivelDetalle !== undefined
+            ? { nivel_detalle: normalizeNivelDetalle(body.nivel_detalle ?? body.nivelDetalle) }
+            : {}),
         cliente: pick(body, clienteKeys),
         vehiculo: pick(body, vehiculoKeys),
         credito: pick(body, creditoKeys),
@@ -87,4 +98,3 @@ function normalizeCotizacionPayload(body) {
 module.exports = {
     normalizeCotizacionPayload,
 };
-
