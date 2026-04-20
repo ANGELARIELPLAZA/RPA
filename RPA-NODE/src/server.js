@@ -1,7 +1,7 @@
 const fs = require("fs");
 const http = require("http");
 const path = require("path");
-const { runCetelemFlowWithRetries } = require("./cetelem/flow");
+const { runCetelemFlow } = require("./cetelem/flow");
 const { normalizeCetelemPayload } = require("./cetelem/normalize-payload");
 const { getActiveContextCount, getPendingTaskCount } = require("./core/context-queue");
 const logger = require("./core/logger");
@@ -193,7 +193,8 @@ async function executeJob(taskId, payload) {
     logger.info(`[task ${shortTaskId(taskId)}] created`);
 
     try {
-        const result = await runCetelemFlowWithRetries(payload, { taskId });
+        const result = await runCetelemFlow(payload);
+        result.elapsedSeconds = result.elapsedSeconds ?? Number(((performance.now() - startedAt) / 1000).toFixed(2));
         updateJob(taskId, {
             status: "completed",
             result,

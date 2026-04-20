@@ -1,1363 +1,749 @@
-const fs = require("fs");
 const path = require("path");
-const BrowserManager = require("../core/browser-manager");
-const { enqueueContextTask, getActiveContextCount } = require("../core/context-queue");
-const logger = require("../core/logger");
-const { logTask, shortTaskId } = require("../core/task-logger");
-const {
-    BAD_URL_TOKEN,
-    isRecordVideoEnabled,
-    LOGIN_URL,
-    LOGS_DIR,
-    MAX_REINTENTOS,
-    PASSWORD,
-    SCREENSHOTS_DIR,
-    TIPO_PERSONA_READY_VALUE,
-    TIPO_PERSONA_SELECTOR,
-    USUARIO,
-    VIDEOS_DIR,
-    assertCredentials,
-} = require("../config");
-const {
-    fillClientData,
-    fillCreditData,
-    fillInsuranceData,
-    fillVehicleData,
-    readInsuranceMonthlyFee,
-    readInsuranceOptions,
-    readVehiclePriceTax,
-    readVehicleTotalAmount,
-} = require("./form");
+const BrowserManager = require("../../../RPA-NODE-V2/core/browser-manager");
+const { LOGIN_URL, SCREENSHOTS_DIR, USUARIO, PASSWORD } = require("../../../RPA-NODE-V2/config");
 
-const READY_TEXT_RAZON_SOCIAL = "capturar nombre de razon social como aparece en el registro del rfc o documentos oficiales";
-const SYSTEMA_EXPERTO_ERROR_TEXT = "Error obteniendo variables para Systema Experto";
-const ACTIVE_POPUP_SESSION_TEXT = "su sesión se encuentra activa en una ventana emergente";
-const POPUP_TIMEOUT_MS = 15000;
-const SESSION_LOAD_WAIT_MS = 6000;
-const REOPEN_POPUP_SELECTOR = "#btnReopen";
-const pageNavigationLocks = new WeakMap();
-const STEP_LOG_WARN_EVERY_MS = 8000;
-const STEP_TIMEOUT_DEFAULT_MS = 45000;
-const VALIDATION_LOCATOR_TIMEOUT_MS = 2500;
-const BAD_GATEWAY_TOKEN = "bad gateway";
-const BAD_GATEWAY_STATUS_TOKEN = "502";
-const NGINX_TOKEN = "nginx";
-const BAD_GATEWAY_SCREENSHOT_COOLDOWN_MS = 30000;
-const diagnosticScreenshotCooldowns = new WeakMap();
-
-const DATA_FLOWS = {
-    cliente: fillClientData,
-    vehiculo: fillVehicleData,
-    credito: fillCreditData,
-    seguro: fillInsuranceData,
-};
-
-function isBrowserClosedError(error) {
-    return /browser.*closed|browser.*disconnected|target.*closed|context.*closed|has been closed/i.test(error.message || "");
+function empty(value) {
+    return value === undefined || value === null || String(value).trim() === "";
 }
 
-function isNavigationAbortError(error) {
-    return /net::ERR_ABORTED|frame detached|navigation.*interrupted|execution context.*destroyed|target.*closed|page.*closed|context.*closed|has been closed/i.test(error.message || "");
+function normalizeString(value) {
+    return String(value).trim();
 }
 
-function createNonRetryableError(message) {
-    const error = new Error(message);
-    error.retryable = false;
-    return error;
+function normalizeUppercase(value) {
+    return normalizeString(value).toUpperCase();
 }
 
-function createPortalUnavailableError(statusCode, url) {
-    const error = createNonRetryableError(`Portal CETELEM no disponible: ${statusCode} Bad Gateway (nginx).`);
-    error.code = "PORTAL_BAD_GATEWAY_502";
-    error.portalStatus = statusCode;
-    error.portalUrl = url || null;
-    return error;
-}
-
-function createTimestamp() {
-    return new Date().toISOString().replace(/[-:]/g, "").replace(/\..+/, "").replace("T", "_");
-}
-
-function maybeFixMojibake(text) {
-    if (typeof text !== "string" || text.length === 0) {
-        return text || "";
+function normalizeCheckbox(value) {
+    if (typeof value === "boolean") {
+        return value;
     }
 
-    if (!/[ÃÂ]/.test(text)) {
-        return text;
+    const normalized = normalizeString(value).toLowerCase();
+    return ["1", "true", "si", "sí", "y", "yes", "on"].includes(normalized);
+}
+
+function normalizeBirthDate(value) {
+    const raw = normalizeString(value);
+    const digits = raw.match(/\d/g)?.join("") || "";
+
+    if (digits.length !== 8) {
+        throw new Error(`customerBirthDate invalida (se esperan 8 digitos): ${raw}`);
     }
 
-    try {
-        return Buffer.from(text, "latin1").toString("utf8");
-    } catch {
-        return text;
-    }
+    const looksLikeIso = /^\s*\d{4}[-/]/.test(raw);
+
+    const yyyy = looksLikeIso ? digits.slice(0, 4) : digits.slice(4, 8);
+    const mm = looksLikeIso ? digits.slice(4, 6) : digits.slice(2, 4);
+    const dd = looksLikeIso ? digits.slice(6, 8) : digits.slice(0, 2);
+
+    return `${dd}/${mm}/${yyyy}`;
 }
 
-function normalizeForMatch(text) {
-    const value = maybeFixMojibake(String(text || ""))
-        .toLowerCase()
-        .normalize("NFD")
-        .replace(/\p{Diacritic}/gu, "");
+function parseDdMmYyyy(value) {
+    const match = String(value || "").match(/(\d{1,2})\D+(\d{1,2})\D+(\d{4})/);
+    if (!match) return null;
 
-    return value.replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+    const day = Number(match[1]);
+    const month = Number(match[2]);
+    const year = Number(match[3]);
+
+    if (!Number.isFinite(day) || !Number.isFinite(month) || !Number.isFinite(year)) return null;
+    return { day, month, year };
 }
 
-function createTimeoutError(label, ms) {
-    const error = new Error(`Timeout en paso "${label}" tras ${ms}ms.`);
-    error.retryable = true;
-    return error;
-}
+async function fillBirthDateMasked(page, selector, value) {
+    const expected = normalizeBirthDate(value);
+    const expectedParsed = parseDdMmYyyy(expected);
 
-async function runStep(label, pageOrPopup, action, {
-    timeoutMs = STEP_TIMEOUT_DEFAULT_MS,
-    warnEveryMs = STEP_LOG_WARN_EVERY_MS,
-    level = "info",
-    meta = {},
-} = {}) {
-    const start = performance.now();
-    const prefix = `[step:${label}]`;
-    const log = logger[level] || logger.info;
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+        await page.waitForSelector(selector, { state: "visible", timeout: 15000 });
+        await page.click(selector);
+        await page.keyboard.press("Control+A");
+        await page.keyboard.press("Backspace");
+        await page.waitForTimeout(200);
 
-    log(`${prefix} start`, {
-        url: getPageUrl(pageOrPopup) || "N/A",
-        closed: Boolean(pageOrPopup?.isClosed?.()),
-        ...meta,
-    });
+        const delay = attempt === 1 ? 110 : attempt === 2 ? 160 : 220;
+        await page.locator(selector).pressSequentially(expected, { delay });
+        await page.locator(selector).press("Tab").catch(() => { });
+        await page.waitForTimeout(400);
 
-    let warned = 0;
-    const warnTimer = warnEveryMs > 0
-        ? setInterval(() => {
-            warned += 1;
-            logger.warn(`${prefix} still waiting`, {
-                warned,
-                elapsedSeconds: elapsedSecondsSince(start),
-                url: getPageUrl(pageOrPopup) || "N/A",
-            });
-        }, warnEveryMs)
-        : null;
+        const got = await page.locator(selector).inputValue().catch(() => "");
 
-    try {
-        const result = await Promise.race([
-            Promise.resolve().then(action),
-            new Promise((_, reject) => setTimeout(() => reject(createTimeoutError(label, timeoutMs)), timeoutMs)),
-        ]);
-
-        log(`${prefix} end`, {
-            elapsedSeconds: elapsedSecondsSince(start),
-            url: getPageUrl(pageOrPopup) || "N/A",
-        });
-
-        return result;
-    } finally {
-        if (warnTimer) {
-            clearInterval(warnTimer);
+        if (/[y]/i.test(got)) {
+            continue;
         }
-    }
-}
 
-function isDeadSession(url) {
-    return (url || "").includes(BAD_URL_TOKEN);
-}
+        const gotParsed = parseDdMmYyyy(got);
 
-function validateSession(pageOrPopup) {
-    const currentUrl = pageOrPopup.url();
-    logger.debug(`URL actual: ${currentUrl}`);
-
-    if (isDeadSession(currentUrl)) {
-        throw new Error("Sesion invalida detectada. Cayo en josso_security_check.");
-    }
-}
-
-async function runExclusivePageNavigation(page, label, action) {
-    if (!page || page.isClosed()) {
-        throw new Error(`No se puede navegar ${label}: page cerrada.`);
-    }
-
-    const previous = pageNavigationLocks.get(page) || Promise.resolve();
-    const current = previous.catch(() => {}).then(async () => {
-        logger.debug(`[nav:${label}] inicio url=${getPageUrl(page) || "N/A"}`);
-        const result = await action();
-        logger.debug(`[nav:${label}] fin url=${getPageUrl(page) || "N/A"}`);
-        return result;
-    });
-
-    const tracked = current.finally(() => {
-        if (pageNavigationLocks.get(page) === tracked) {
-            pageNavigationLocks.delete(page);
-        }
-    });
-
-    pageNavigationLocks.set(page, tracked);
-
-    return current;
-}
-
-async function gotoAndSettle(page, url, label, timeout = 30000) {
-    return runExclusivePageNavigation(page, label, async () => {
-        const response = await page.goto(url, { waitUntil: "domcontentloaded", timeout });
-        const status = response?.status?.();
-
-        if (status === 502) {
-            logger.warn(`[nav:${label}] portal devolvio 502 Bad Gateway`, { url });
-            const diagPath = await captureDiagnosticScreenshot(page, "bad_gateway").catch(() => null);
-            const error = createPortalUnavailableError(502, url);
-            if (diagPath) {
-                error.screenshotPath = diagPath;
-                error.errorScreenshotPath = diagPath;
+        if (expectedParsed && gotParsed) {
+            if (
+                expectedParsed.day === gotParsed.day
+                && expectedParsed.month === gotParsed.month
+                && expectedParsed.year === gotParsed.year
+            ) {
+                return got;
             }
-            throw error;
-        } else if (status && status >= 500) {
-            logger.warn(`[nav:${label}] portal devolvio error ${status}`, { url });
         }
-
-        await waitForPageSettled(page, timeout).catch((error) => {
-            logger.warn(`[nav:${label}] pagina no quedo en networkidle: ${error.message}`);
-        });
-        return page;
-    });
-}
-
-function registerDialogHandler(pageOrPopup) {
-    pageOrPopup.on("dialog", async (dialog) => {
-        const message = dialog.message() || "";
-        logger.debug(`DIALOG: ${message}`);
-
-        try {
-            if (message.includes(SYSTEMA_EXPERTO_ERROR_TEXT)) {
-                await dialog.accept();
-                logger.debug("DIALOG aceptado: Systema Experto");
-                return;
-            }
-
-            await dialog.dismiss();
-            logger.debug("DIALOG descartado");
-        } catch (error) {
-            logger.warn(`No se pudo cerrar dialog: ${error.message}`);
-        }
-    });
-}
-
-async function getLowerBodyText(pageOrPopup, timeout = 2000) {
-    try {
-        return maybeFixMojibake(await pageOrPopup.locator("body").innerText({ timeout })).toLowerCase();
-    } catch {
-        return "";
     }
+
+    const lastValue = await page.locator(selector).inputValue().catch(() => "");
+    throw new Error(
+        `No se pudo setear fecha de nacimiento. Valor final: "${lastValue}" (esperado: "${normalizeBirthDate(value)}")`
+    );
 }
 
-async function getNormalizedBodyText(pageOrPopup, timeout = 2000) {
-    try {
-        return normalizeForMatch(await pageOrPopup.locator("body").innerText({ timeout }));
-    } catch {
-        return "";
+async function setInputValueOnce(page, selector, value) {
+    await page.waitForSelector(selector, { state: "visible", timeout: 15000 });
+
+    await page.$eval(
+        selector,
+        (el, nextValue) => {
+            el.value = "";
+            el.value = String(nextValue ?? "");
+            el.dispatchEvent(new Event("input", { bubbles: true }));
+            el.dispatchEvent(new Event("change", { bubbles: true }));
+        },
+        value
+    );
+}
+
+async function ensureSelectValue(page, selector, value) {
+    const desired = normalizeString(value);
+
+    await page.waitForSelector(selector, { state: "visible", timeout: 20000 });
+
+    await page.waitForFunction(
+        (selector) => {
+            const el = document.querySelector(selector);
+            return !!el && !el.disabled && el.options.length > 1;
+        },
+        selector,
+        { timeout: 30000 }
+    );
+
+    await page.waitForFunction(
+        ({ selector, value }) => {
+            const el = document.querySelector(selector);
+            if (!el) return false;
+            return Array.from(el.options).some(opt => opt.value === value);
+        },
+        { selector, value: desired },
+        { timeout: 30000 }
+    );
+
+    await page.selectOption(selector, desired);
+
+    await page.waitForFunction(
+        ({ selector, value }) => {
+            const el = document.querySelector(selector);
+            return !!el && el.value === value;
+        },
+        { selector, value: desired },
+        { timeout: 10000 }
+    );
+}
+
+
+
+async function dismissRfcErrorDialog(page) {
+    const dialog = page.locator("div.messager-body.window-body", { hasText: "Error al generar RFC" }).first();
+
+    const isVisible = await dialog.isVisible().catch(() => false);
+
+    if (!isVisible) {
+        await dialog.waitFor({ state: "visible", timeout: 1500 }).catch(() => { });
     }
-}
 
-function isBadGatewayBody(normalizedBody) {
-    const body = String(normalizedBody || "");
-    if (!body) {
+    if (!(await dialog.isVisible().catch(() => false))) {
         return false;
     }
 
-    const hasBadGateway = body.includes(BAD_GATEWAY_TOKEN);
-    const hasNginx = body.includes(NGINX_TOKEN);
-    const has502 = body.includes(`${BAD_GATEWAY_STATUS_TOKEN} ${BAD_GATEWAY_TOKEN}`) || body.includes(BAD_GATEWAY_STATUS_TOKEN);
+    const okButton = dialog.locator("a.l-btn", { hasText: "Ok" }).first();
+    await okButton.click({ timeout: 5000 }).catch(() => { });
+    await page.waitForTimeout(500);
 
-    return hasBadGateway && (hasNginx || has502);
+    return true;
 }
 
-async function captureDiagnosticScreenshot(pageOrPopup, suffix) {
-    if (!pageOrPopup || pageOrPopup.isClosed?.()) {
-        return null;
-    }
+async function runCetelemFlow(payload) {
+    const browser = await BrowserManager.getBrowser();
+    const context = await browser.newContext({
+        viewport: { width: 1366, height: 900 },
+    });
 
-    const cooldownKey = pageOrPopup;
-    const now = Date.now();
-    const last = diagnosticScreenshotCooldowns.get(cooldownKey) || 0;
-
-    if (now - last < BAD_GATEWAY_SCREENSHOT_COOLDOWN_MS) {
-        return null;
-    }
-
-    diagnosticScreenshotCooldowns.set(cooldownKey, now);
+    const page = await context.newPage();
+    let popup;
 
     try {
-        const timestamp = createTimestamp();
-        const fileName = `playwright_${suffix}_${timestamp}.png`;
-        const fullPath = path.join(SCREENSHOTS_DIR, fileName);
+        await page.goto(LOGIN_URL, {
+            waitUntil: "domcontentloaded",
+            timeout: 30000,
+        });
 
-        await pageOrPopup.screenshot({
-            path: fullPath,
+        await page.fill('input[name="userName"]', USUARIO);
+        await page.locator("#btnEntrar").click();
+
+        await page.fill('input[name="userPassword"]', PASSWORD);
+
+        const popupPromise = page.waitForEvent("popup", { timeout: 15000 });
+        await page.locator("#btnEntrar").click();
+
+        popup = await popupPromise;
+        await popup.waitForLoadState("domcontentloaded", { timeout: 30000 });
+
+        await popup.waitForURL("https://cck.creditoclick.com.mx/cotizador/01-cotizacion.html", {
+            timeout: 30000,
+        });
+
+        const quoteBreadcrumb = '[id="18n_breadcrumbs_quote"]';
+
+        await popup.waitForSelector(quoteBreadcrumb, {
+            state: "visible",
+            timeout: 15000,
+        });
+        await popup.locator(quoteBreadcrumb).click({ timeout: 15000, force: true });
+        await popup.waitForTimeout(1000);
+
+        const cliente = payload?.cliente;
+        const vehiculo = payload?.vehiculo;
+        const credito = payload?.credito;
+        const seguro = payload?.seguro;
+
+        if (cliente) {
+            const customerType = normalizeString(cliente.customerType || "");
+
+            console.log(cliente);
+
+            if (!customerType) throw new Error("Falta customerType");
+            if (empty(cliente.genero)) throw new Error("Falta campo requerido: genero");
+            if (empty(cliente.customerTitle)) throw new Error("Falta campo requerido: customerTitle");
+            if (empty(cliente.customerName)) throw new Error("Falta campo requerido: customerName");
+            if (empty(cliente.customerAPaterno)) throw new Error("Falta campo requerido: customerAPaterno");
+            if (empty(cliente.customerBirthDate)) throw new Error("Falta campo requerido: customerBirthDate");
+            if (empty(cliente.customerRfc)) throw new Error("Falta campo requerido: customerRfc");
+
+            if (customerType === "2") {
+                if (empty(cliente.customerRazonSocial)) {
+                    throw new Error("Falta campo requerido: customerRazonSocial");
+                }
+            }
+
+            if (customerType === "3") {
+                if (empty(cliente.customerNumUnidades)) {
+                    throw new Error("Falta campo requerido: customerNumUnidades");
+                }
+
+                if (empty(cliente.customerFirstCredit)) {
+                    throw new Error("Falta campo requerido: customerFirstCredit");
+                }
+            }
+
+            console.log("Seleccionando customerType:", customerType);
+            await popup.waitForSelector("#customerType", { state: "visible", timeout: 15000 });
+            await popup.selectOption("#customerType", customerType);
+
+            await popup.waitForTimeout(1000);
+
+            console.log("Esperando #genero...");
+            await popup.waitForSelector("#genero", { state: "visible", timeout: 15000 });
+
+            console.log("Seleccionando genero:", cliente.genero);
+            await popup.selectOption("#genero", normalizeString(cliente.genero));
+
+            await popup.waitForTimeout(1000);
+
+            console.log("Esperando #customerTitle...");
+            await popup.waitForSelector("#customerTitle", { state: "visible", timeout: 15000 });
+
+            console.log("Seleccionando customerTitle:", cliente.customerTitle);
+            await popup.selectOption("#customerTitle", normalizeString(cliente.customerTitle));
+
+            await popup.waitForTimeout(1000);
+
+            console.log("Esperando #customerName...");
+            await popup.waitForSelector("#customerName", { state: "visible", timeout: 15000 });
+
+            console.log("Llenando customerName:", cliente.customerName);
+            await popup.fill("#customerName", normalizeUppercase(cliente.customerName));
+
+            await popup.waitForTimeout(1000);
+
+            console.log("Esperando #customerAPaterno...");
+            await popup.waitForSelector("#customerAPaterno", { state: "visible", timeout: 15000 });
+
+            console.log("Llenando customerAPaterno:", cliente.customerAPaterno);
+            await popup.fill("#customerAPaterno", normalizeUppercase(cliente.customerAPaterno));
+
+            await popup.waitForTimeout(1000);
+
+            if (!empty(cliente.customerAMaterno)) {
+                console.log("Esperando #customerAMaterno...");
+                await popup.waitForSelector("#customerAMaterno", { state: "visible", timeout: 15000 });
+
+                console.log("Llenando customerAMaterno:", cliente.customerAMaterno);
+                await popup.fill("#customerAMaterno", normalizeUppercase(cliente.customerAMaterno));
+
+                await popup.waitForTimeout(1000);
+            }
+
+            console.log("Esperando #customerBirthDate...");
+            await popup.waitForSelector("#customerBirthDate", { state: "visible", timeout: 15000 });
+
+            console.log("Escribiendo customerBirthDate con mascara:", cliente.customerBirthDate);
+            const valorFecha = await fillBirthDateMasked(popup, "#customerBirthDate", cliente.customerBirthDate);
+            console.log("Fecha final en input:", valorFecha);
+
+            await popup.waitForTimeout(1000);
+            console.log("Esperando #customerRfc...");
+            await popup.waitForSelector("#customerRfc", { state: "visible", timeout: 15000 });
+
+            console.log("Llenando customerRfc:", cliente.customerRfc);
+            await popup.fill("#customerRfc", normalizeUppercase(cliente.customerRfc));
+
+            await popup.waitForTimeout(1000);
+
+            if (customerType === "2") {
+                console.log("Esperando #customerRazonSocial...");
+                await popup.waitForSelector("#customerRazonSocial", { state: "visible", timeout: 15000 });
+
+                console.log("Llenando customerRazonSocial:", cliente.customerRazonSocial);
+                await popup.fill("#customerRazonSocial", normalizeUppercase(cliente.customerRazonSocial));
+
+                await popup.waitForTimeout(1000);
+            }
+
+            if (customerType === "3") {
+                console.log("Esperando #customerNumUnidades...");
+                await popup.waitForSelector("#customerNumUnidades", { state: "visible", timeout: 15000 });
+
+                console.log("Seleccionando customerNumUnidades:", cliente.customerNumUnidades);
+                await popup.selectOption("#customerNumUnidades", normalizeString(cliente.customerNumUnidades));
+
+                await popup.waitForTimeout(1000);
+
+                console.log("Esperando #customerFirstCredit...");
+                await popup.waitForSelector("#customerFirstCredit", { state: "visible", timeout: 15000 });
+
+                console.log("Seleccionando customerFirstCredit:", cliente.customerFirstCredit);
+                await popup.selectOption("#customerFirstCredit", normalizeString(cliente.customerFirstCredit));
+
+                await popup.waitForTimeout(1000);
+            }
+        }
+        if (vehiculo) {
+            console.log(vehiculo);
+
+            if (empty(vehiculo.vehicleType)) throw new Error("Falta campo requerido: vehicleType");
+            if (empty(vehiculo.insuranceVehicleUse)) throw new Error("Falta campo requerido: insuranceVehicleUse");
+            if (empty(vehiculo.vehicleBrand)) throw new Error("Falta campo requerido: vehicleBrand");
+            if (empty(vehiculo.vehicleAnio)) throw new Error("Falta campo requerido: vehicleAnio");
+            if (empty(vehiculo.vehicleModel)) throw new Error("Falta campo requerido: vehicleModel");
+            if (empty(vehiculo.vehicleVersion)) throw new Error("Falta campo requerido: vehicleVersion");
+
+            console.log("Esperando #vehicleType...");
+            await popup.waitForSelector("#vehicleType", { state: "visible", timeout: 15000 });
+
+            console.log("Seleccionando vehicleType:", vehiculo.vehicleType);
+            await popup.selectOption("#vehicleType", normalizeString(vehiculo.vehicleType));
+
+            await popup.waitForTimeout(1000);
+
+            if (!empty(vehiculo.seminuevoCertificado)) {
+                const desired = normalizeCheckbox(vehiculo.seminuevoCertificado);
+
+                console.log("Esperando #18n_seminuevo_certificado...");
+                const locator = popup.locator('input[type="checkbox"][id="18n_seminuevo_certificado"]').first();
+                await locator.waitFor({ state: "attached", timeout: 15000 });
+
+                const checked = await locator.isChecked().catch(() => false);
+                console.log("Estado actual seminuevoCertificado:", checked, "estado deseado:", desired);
+
+                if (checked !== desired) {
+                    await locator.click().catch(() => { });
+                }
+
+                await popup.waitForTimeout(1000);
+            }
+
+            console.log("Esperando #insuranceVehicleUse...");
+            await popup.waitForSelector("#insuranceVehicleUse", { state: "visible", timeout: 15000 });
+
+            console.log("Seleccionando insuranceVehicleUse:", vehiculo.insuranceVehicleUse);
+            await popup.selectOption("#insuranceVehicleUse", normalizeString(vehiculo.insuranceVehicleUse));
+
+            await popup.waitForTimeout(1000);
+
+            if (!empty(vehiculo.tipoCarga)) {
+                console.log("Esperando #tipoCarga...");
+                await popup.waitForSelector("#tipoCarga", { state: "visible", timeout: 15000 });
+
+                console.log("Seleccionando tipoCarga:", vehiculo.tipoCarga);
+                await popup.selectOption("#tipoCarga", normalizeString(vehiculo.tipoCarga));
+
+                await popup.waitForTimeout(1000);
+            }
+
+            if (!empty(vehiculo.servicio)) {
+                console.log("Esperando #servicio...");
+                await popup.waitForSelector("#servicio", { state: "visible", timeout: 15000 });
+
+                console.log("Llenando servicio:", vehiculo.servicio);
+                await popup.fill("#servicio", normalizeUppercase(vehiculo.servicio));
+
+                await popup.waitForTimeout(1000);
+            }
+
+            console.log("Esperando #vehicleBrand...");
+            await popup.waitForSelector("#vehicleBrand", { state: "visible", timeout: 15000 });
+
+            console.log("Esperando opción de vehicleBrand:", vehiculo.vehicleBrand);
+            await popup.waitForFunction((value) => {
+                const el = document.querySelector("#vehicleBrand");
+                if (!el) return false;
+                return Array.from(el.options).some(opt => opt.value === value);
+            }, normalizeString(vehiculo.vehicleBrand), { timeout: 15000 });
+
+            console.log("Seleccionando vehicleBrand:", vehiculo.vehicleBrand);
+            await popup.selectOption("#vehicleBrand", normalizeString(vehiculo.vehicleBrand));
+
+            await popup.waitForTimeout(1000);
+
+            console.log("Esperando #vehicleAnio...");
+            await popup.waitForSelector("#vehicleAnio", { state: "visible", timeout: 15000 });
+
+            console.log("Esperando opción de vehicleAnio:", vehiculo.vehicleAnio);
+            await popup.waitForFunction((value) => {
+                const el = document.querySelector("#vehicleAnio");
+                if (!el) return false;
+                return Array.from(el.options).some(opt => opt.value === value);
+            }, normalizeString(vehiculo.vehicleAnio), { timeout: 15000 });
+
+            console.log("Seleccionando vehicleAnio:", vehiculo.vehicleAnio);
+            await popup.selectOption("#vehicleAnio", normalizeString(vehiculo.vehicleAnio));
+
+            await popup.waitForTimeout(1000);
+
+            console.log("Esperando #vehicleModel...");
+            await popup.waitForSelector("#vehicleModel", { state: "visible", timeout: 15000 });
+
+            console.log("Esperando opción de vehicleModel:", vehiculo.vehicleModel);
+            await popup.waitForFunction((value) => {
+                const el = document.querySelector("#vehicleModel");
+                if (!el) return false;
+                return Array.from(el.options).some(opt => opt.value === value);
+            }, normalizeString(vehiculo.vehicleModel), { timeout: 15000 });
+
+            console.log("Seleccionando vehicleModel:", vehiculo.vehicleModel);
+            await popup.selectOption("#vehicleModel", normalizeString(vehiculo.vehicleModel));
+
+            let valorModelo = await popup.locator("#vehicleModel").inputValue().catch(() => null);
+            console.log("vehicleModel después de seleccionar:", valorModelo);
+
+            await popup.waitForTimeout(1000);
+
+            valorModelo = await popup.locator("#vehicleModel").inputValue().catch(() => null);
+            console.log("vehicleModel después de esperar:", valorModelo);
+
+            console.log("Esperando #vehicleVersion...");
+            await popup.waitForSelector("#vehicleVersion", { state: "visible", timeout: 15000 });
+
+            console.log("Esperando opción de vehicleVersion:", vehiculo.vehicleVersion);
+            await popup.waitForFunction((value) => {
+                const el = document.querySelector("#vehicleVersion");
+                if (!el) return false;
+                return Array.from(el.options).some(opt => opt.value === value);
+            }, normalizeString(vehiculo.vehicleVersion), { timeout: 15000 });
+
+            console.log("Seleccionando vehicleVersion:", vehiculo.vehicleVersion);
+            await popup.selectOption("#vehicleVersion", normalizeString(vehiculo.vehicleVersion));
+
+            const valorVersion = await popup.locator("#vehicleVersion").inputValue().catch(() => null);
+            console.log("vehicleVersion final:", valorVersion);
+
+            await popup.waitForTimeout(4000);
+            if (!empty(vehiculo.vehicleAccesories)) {
+                console.log("Llenando #vehicleAccesories...");
+
+                await setInputValueOnce(popup, "#vehicleAccesories", normalizeUppercase(vehiculo.vehicleAccesories));
+                await popup.waitForTimeout(500);
+                await popup.waitForLoadState("networkidle", { timeout: 5000 }).catch(() => { });
+
+                const brandNow = await popup.locator("#vehicleBrand").inputValue().catch(() => null);
+                const anioNow = await popup.locator("#vehicleAnio").inputValue().catch(() => null);
+                const modelNow = await popup.locator("#vehicleModel").inputValue().catch(() => null);
+                const versionNow = await popup.locator("#vehicleVersion").inputValue().catch(() => null);
+
+                if (brandNow !== normalizeString(vehiculo.vehicleBrand)) {
+                    console.log("Se reseteó vehicleBrand; re-seleccionando...");
+                    await ensureSelectValue(popup, "#vehicleBrand", vehiculo.vehicleBrand);
+                    await popup.waitForTimeout(800);
+                }
+
+                if (anioNow !== normalizeString(vehiculo.vehicleAnio)) {
+                    console.log("Se reseteó vehicleAnio; re-seleccionando...");
+                    await ensureSelectValue(popup, "#vehicleAnio", vehiculo.vehicleAnio);
+                    await popup.waitForTimeout(800);
+                }
+
+                if (modelNow !== normalizeString(vehiculo.vehicleModel)) {
+                    console.log("Se reseteó vehicleModel; re-seleccionando...");
+                    await ensureSelectValue(popup, "#vehicleModel", vehiculo.vehicleModel);
+                    await popup.waitForTimeout(800);
+                }
+
+                if (versionNow !== normalizeString(vehiculo.vehicleVersion)) {
+                    console.log("Se reseteó vehicleVersion; re-seleccionando...");
+                    await ensureSelectValue(popup, "#vehicleVersion", vehiculo.vehicleVersion);
+                    await popup.waitForTimeout(800);
+                }
+
+
+            }
+
+
+            if (!empty(vehiculo.vehicleIsConverted)) {
+                const desired = normalizeCheckbox(vehiculo.vehicleIsConverted);
+
+                console.log("Esperando #vehicleIsConverted...");
+                const locator = popup.locator("#vehicleIsConverted").first();
+                await locator.waitFor({ state: "attached", timeout: 15000 });
+
+                const checked = await locator.isChecked().catch(() => false);
+                console.log("Estado actual vehicleIsConverted:", checked, "estado deseado:", desired);
+
+                if (checked !== desired) {
+                    await locator.click().catch(() => { });
+                }
+
+                await popup.waitForTimeout(1000);
+
+                let modelValue = await popup.locator("#vehicleModel").inputValue().catch(() => null);
+                let versionValue = await popup.locator("#vehicleVersion").inputValue().catch(() => null);
+                console.log("Después de vehicleIsConverted -> vehicleModel:", modelValue);
+                console.log("Después de vehicleIsConverted -> vehicleVersion:", versionValue);
+            }
+
+            if (!empty(vehiculo.vehicleAccesoriesAmount)) {
+                console.log("Esperando #vehicleAccesoriesAmount...");
+                await popup.waitForSelector("#vehicleAccesoriesAmount", { state: "visible", timeout: 15000 });
+
+                console.log("Llenando vehicleAccesoriesAmount:", vehiculo.vehicleAccesoriesAmount);
+                await popup.fill("#vehicleAccesoriesAmount", normalizeString(vehiculo.vehicleAccesoriesAmount));
+
+                await popup.waitForTimeout(1000);
+
+                let modelValue = await popup.locator("#vehicleModel").inputValue().catch(() => null);
+                let versionValue = await popup.locator("#vehicleVersion").inputValue().catch(() => null);
+                console.log("Después de vehicleAccesoriesAmount -> vehicleModel:", modelValue);
+                console.log("Después de vehicleAccesoriesAmount -> vehicleVersion:", versionValue);
+            }
+
+            if (!empty(vehiculo.vehicleChargeStationAmount)) {
+                console.log("Esperando #vehicleChargeStationAmount...");
+                const locator = popup.locator("#vehicleChargeStationAmount").first();
+
+                if (await locator.isVisible().catch(() => false)) {
+                    console.log("Llenando vehicleChargeStationAmount:", vehiculo.vehicleChargeStationAmount);
+                    await locator.fill(normalizeString(vehiculo.vehicleChargeStationAmount));
+                    await popup.waitForTimeout(1000);
+
+                    let modelValue = await popup.locator("#vehicleModel").inputValue().catch(() => null);
+                    let versionValue = await popup.locator("#vehicleVersion").inputValue().catch(() => null);
+                    console.log("Después de vehicleChargeStationAmount -> vehicleModel:", modelValue);
+                    console.log("Después de vehicleChargeStationAmount -> vehicleVersion:", versionValue);
+                }
+            }
+
+            if (!empty(vehiculo.vehicleExtendedWarrantyOption)) {
+                const selector = `input[type="radio"][name="vehicleExtendedWarrantyOption"][value="${normalizeString(vehiculo.vehicleExtendedWarrantyOption)}"]`;
+
+                console.log("Esperando radio vehicleExtendedWarrantyOption:", selector);
+                await popup.waitForSelector(selector, { state: "visible", timeout: 15000 });
+
+                console.log("Seleccionando vehicleExtendedWarrantyOption:", vehiculo.vehicleExtendedWarrantyOption);
+                await popup.locator(selector).first().check().catch(async () => {
+                    await popup.locator(selector).first().click().catch(() => { });
+                });
+
+                await popup.waitForTimeout(1000);
+
+                let modelValue = await popup.locator("#vehicleModel").inputValue().catch(() => null);
+                let versionValue = await popup.locator("#vehicleVersion").inputValue().catch(() => null);
+                console.log("Después de vehicleExtendedWarrantyOption -> vehicleModel:", modelValue);
+                console.log("Después de vehicleExtendedWarrantyOption -> vehicleVersion:", versionValue);
+            }
+
+            if (!empty(vehiculo.gapInsurance)) {
+                const selector = `input[type="radio"][name="gapInsurance"][value="${normalizeUppercase(vehiculo.gapInsurance)}"]`;
+
+                console.log("Esperando radio gapInsurance:", selector);
+                await popup.waitForSelector(selector, { state: "visible", timeout: 15000 });
+
+                console.log("Seleccionando gapInsurance:", vehiculo.gapInsurance);
+                await popup.locator(selector).first().check().catch(async () => {
+                    await popup.locator(selector).first().click().catch(() => { });
+                });
+
+                await popup.waitForTimeout(1000);
+                await popup.waitForLoadState("networkidle", { timeout: 5000 }).catch(() => { });
+
+                console.log("Esperando reconstrucción de cascada después de gapInsurance...");
+                await waitVehicleCascadeReady(popup);
+
+                console.log("Reaplicando cascada después de gapInsurance...");
+                await reapplyVehicleCascade(popup, vehiculo);
+
+                let modelValue = await popup.locator("#vehicleModel").inputValue().catch(() => null);
+                let versionValue = await popup.locator("#vehicleVersion").inputValue().catch(() => null);
+                console.log("Después de gapInsurance -> vehicleModel:", modelValue);
+                console.log("Después de gapInsurance -> vehicleVersion:", versionValue);
+            }
+
+            if (!empty(vehiculo.gapInsurancePlan)) {
+                console.log("Esperando #gapInsurancePlan...");
+                await popup.waitForSelector("#gapInsurancePlan", { state: "visible", timeout: 15000 });
+
+                console.log("Seleccionando gapInsurancePlan:", vehiculo.gapInsurancePlan);
+                await popup.selectOption("#gapInsurancePlan", normalizeString(vehiculo.gapInsurancePlan));
+
+                await popup.waitForTimeout(1000);
+
+                let modelValue = await popup.locator("#vehicleModel").inputValue().catch(() => null);
+                let versionValue = await popup.locator("#vehicleVersion").inputValue().catch(() => null);
+                console.log("Después de gapInsurancePlan -> vehicleModel:", modelValue);
+                console.log("Después de gapInsurancePlan -> vehicleVersion:", versionValue);
+            }
+
+            if (!empty(vehiculo.gapInsuranceType)) {
+                const selector = `input[type="radio"][name="gapInsuranceType"][value="${normalizeUppercase(vehiculo.gapInsuranceType)}"]`;
+
+                console.log("Esperando radio gapInsuranceType:", selector);
+                await popup.waitForSelector(selector, { state: "visible", timeout: 15000 });
+
+                console.log("Seleccionando gapInsuranceType:", vehiculo.gapInsuranceType);
+                await popup.locator(selector).first().check().catch(async () => {
+                    await popup.locator(selector).first().click().catch(() => { });
+                });
+
+                await popup.waitForTimeout(1000);
+
+                let modelValue = await popup.locator("#vehicleModel").inputValue().catch(() => null);
+                let versionValue = await popup.locator("#vehicleVersion").inputValue().catch(() => null);
+                console.log("Después de gapInsuranceType -> vehicleModel:", modelValue);
+                console.log("Después de gapInsuranceType -> vehicleVersion:", versionValue);
+            }
+        }
+        await popup.waitForTimeout(1000);
+
+        if (credito) {
+            if (!empty(credito.creditDepositPercent)) {
+                await popup.waitForSelector("#creditDepositPercent", { state: "visible", timeout: 15000 });
+                await popup.fill("#creditDepositPercent", normalizeString(credito.creditDepositPercent));
+                await popup.waitForTimeout(1000);
+            }
+
+            if (!empty(credito.creditDepositAmount)) {
+                await popup.waitForSelector("#creditDepositAmount", { state: "visible", timeout: 15000 });
+                await popup.fill("#creditDepositAmount", normalizeString(credito.creditDepositAmount));
+                await popup.waitForTimeout(1000);
+            }
+
+            if (!empty(credito.creditDepositPlan)) {
+                await popup.waitForSelector("#creditDepositPlan", { state: "visible", timeout: 15000 });
+                await popup.selectOption("#creditDepositPlan", { label: normalizeString(credito.creditDepositPlan) }).catch(async () => {
+                    await popup.selectOption("#creditDepositPlan", normalizeString(credito.creditDepositPlan));
+                });
+                await popup.waitForTimeout(1000);
+            }
+
+            if (!empty(credito.creditDepositTerm)) {
+                await popup.waitForSelector("#creditDepositTerm", { state: "visible", timeout: 15000 });
+                await popup.selectOption("#creditDepositTerm", { label: normalizeString(credito.creditDepositTerm) }).catch(async () => {
+                    await popup.selectOption("#creditDepositTerm", normalizeString(credito.creditDepositTerm));
+                });
+                await popup.waitForTimeout(1000);
+            }
+        }
+
+        if (seguro) {
+            if (!empty(seguro.insuranceCoverage)) {
+                await popup.waitForSelector("#insuranceCoverage", { state: "visible", timeout: 15000 });
+                await popup.selectOption("#insuranceCoverage", { label: normalizeString(seguro.insuranceCoverage) }).catch(async () => {
+                    await popup.selectOption("#insuranceCoverage", normalizeString(seguro.insuranceCoverage));
+                });
+                await popup.waitForTimeout(1000);
+            }
+
+            if (empty(seguro.insuranceCP)) throw new Error("Falta campo requerido: insuranceCP");
+            if (empty(seguro.insuranceRecruitment)) throw new Error("Falta campo requerido: insuranceRecruitment");
+            if (empty(seguro.insuranceType)) throw new Error("Falta campo requerido: insuranceType");
+            if (empty(seguro.insurancePaymentTermRemnant)) throw new Error("Falta campo requerido: insurancePaymentTermRemnant");
+            if (empty(seguro.insuranceCoverageLorant)) throw new Error("Falta campo requerido: insuranceCoverageLorant");
+
+            await popup.waitForSelector("#insuranceCP", { state: "visible", timeout: 15000 });
+            await popup.fill("#insuranceCP", normalizeString(seguro.insuranceCP));
+            await popup.waitForTimeout(1000);
+
+            await popup.waitForSelector("#insuranceRecruitment", { state: "visible", timeout: 15000 });
+            await popup.selectOption("#insuranceRecruitment", { label: normalizeString(seguro.insuranceRecruitment) }).catch(async () => {
+                await popup.selectOption("#insuranceRecruitment", normalizeString(seguro.insuranceRecruitment));
+            });
+            await popup.waitForTimeout(1000);
+
+            await popup.waitForSelector("#insuranceType", { state: "visible", timeout: 15000 });
+            await popup.selectOption("#insuranceType", { label: normalizeString(seguro.insuranceType) }).catch(async () => {
+                await popup.selectOption("#insuranceType", normalizeString(seguro.insuranceType));
+            });
+            await popup.waitForTimeout(1000);
+
+            if (!empty(seguro.insuranceTermRemnant)) {
+                await popup.waitForSelector("#insuranceTermRemnant", { state: "visible", timeout: 15000 });
+                await popup.selectOption("#insuranceTermRemnant", { label: normalizeString(seguro.insuranceTermRemnant) }).catch(async () => {
+                    await popup.selectOption("#insuranceTermRemnant", normalizeString(seguro.insuranceTermRemnant));
+                });
+                await popup.waitForTimeout(1000);
+            }
+
+            await popup.waitForSelector("#insurancePaymentTermRemnant", { state: "visible", timeout: 15000 });
+            await popup.selectOption("#insurancePaymentTermRemnant", { label: normalizeString(seguro.insurancePaymentTermRemnant) }).catch(async () => {
+                await popup.selectOption("#insurancePaymentTermRemnant", normalizeString(seguro.insurancePaymentTermRemnant));
+            });
+            await popup.waitForTimeout(1000);
+
+            await popup.waitForSelector("#insuranceCoverageLorant", { state: "visible", timeout: 15000 });
+            await popup.selectOption("#insuranceCoverageLorant", { label: normalizeUppercase(seguro.insuranceCoverageLorant) }).catch(async () => {
+                await popup.selectOption("#insuranceCoverageLorant", normalizeUppercase(seguro.insuranceCoverageLorant));
+            });
+            await popup.waitForTimeout(1000);
+        }
+
+        await dismissRfcErrorDialog(popup);
+
+        const screenshotPath = path.join(
+            SCREENSHOTS_DIR,
+            `playwright_${Date.now()}.png`
+        );
+
+        await popup.screenshot({
+            path: screenshotPath,
             type: "png",
             fullPage: true,
         });
 
-        logger.warn(`[diag] screenshot ${suffix}: /screenshots/${fileName}`, {
-            path: fullPath,
-            url: getPageUrl(pageOrPopup) || "N/A",
-        });
-
-        return fullPath;
-    } catch (error) {
-        logger.warn(`[diag] no se pudo tomar screenshot ${suffix}: ${error.message}`);
-        return null;
-    }
-}
-
-async function detectBlockingOverlay(pageOrPopup) {
-    if (!pageOrPopup || pageOrPopup.isClosed?.()) {
-        return { blocking: false, hits: [] };
-    }
-
-    const candidates = [
-        ".window-mask",
-        ".datagrid-mask",
-        ".datagrid-mask-msg",
-        ".panel-mask",
-        ".panel-loading",
-        ".loading-mask",
-        ".loading-overlay",
-        "[class*=\"mask\"]",
-        "[id*=\"mask\"]",
-        "[class*=\"loading\"]",
-        "[id*=\"loading\"]",
-        "[aria-busy=\"true\"]",
-    ];
-
-    try {
-        return await pageOrPopup.evaluate((selectors) => {
-            const viewportArea = Math.max(1, window.innerWidth * window.innerHeight);
-            const hits = [];
-
-            const isVisible = (el) => {
-                if (!(el instanceof Element)) return false;
-                const style = window.getComputedStyle(el);
-                if (style.display === "none" || style.visibility === "hidden") return false;
-                if (Number(style.opacity || "1") < 0.05) return false;
-                const rect = el.getBoundingClientRect();
-                if (rect.width < 10 || rect.height < 10) return false;
-                if (rect.bottom <= 0 || rect.right <= 0) return false;
-                if (rect.top >= window.innerHeight || rect.left >= window.innerWidth) return false;
-                return true;
-            };
-
-            const isBlocking = (el) => {
-                const style = window.getComputedStyle(el);
-                if (style.pointerEvents === "none") return false;
-                const rect = el.getBoundingClientRect();
-                const area = Math.max(0, rect.width) * Math.max(0, rect.height);
-                const coversViewport = area / viewportArea >= 0.35;
-                if (!coversViewport) return false;
-
-                const x = Math.floor(window.innerWidth / 2);
-                const y = Math.floor(window.innerHeight / 2);
-                const top = document.elementFromPoint(x, y);
-                return top === el || (top instanceof Node && el.contains(top));
-            };
-
-            for (const selector of selectors) {
-                const elements = Array.from(document.querySelectorAll(selector));
-                for (const el of elements) {
-                    if (!isVisible(el)) continue;
-                    const blocking = isBlocking(el);
-                    if (!blocking) continue;
-
-                    const rect = el.getBoundingClientRect();
-                    hits.push({
-                        selector,
-                        tag: el.tagName,
-                        id: el.id || null,
-                        className: typeof el.className === "string" ? el.className : null,
-                        rect: {
-                            x: Math.round(rect.x),
-                            y: Math.round(rect.y),
-                            width: Math.round(rect.width),
-                            height: Math.round(rect.height),
-                        },
-                    });
-
-                    if (hits.length >= 5) {
-                        return { blocking: true, hits };
-                    }
-                }
-            }
-
-            return { blocking: hits.length > 0, hits };
-        }, candidates);
-    } catch {
-        return { blocking: false, hits: [] };
-    }
-}
-
-function classifySessionUrl(url) {
-    if (!url) {
-        return "sin_url";
-    }
-
-    if (isDeadSession(url)) {
-        return "dead_josso";
-    }
-
-    if (url.includes("cotizador")) {
-        return "cotizador";
-    }
-
-    if (url.includes("/login") || url.includes("cck/login") || url.includes("auth/kia/login")) {
-        return "login";
-    }
-
-    return "desconocido";
-}
-
-async function logSessionState(pageOrPopup, label, cause = "") {
-    const url = getPageUrl(pageOrPopup);
-    const body = pageOrPopup && !pageOrPopup.isClosed?.()
-        ? await getNormalizedBodyText(pageOrPopup, 1000)
-        : "";
-    const state = isBadGatewayBody(body)
-        ? "bad_gateway_502"
-        : body.includes(normalizeForMatch(ACTIVE_POPUP_SESSION_TEXT))
-            ? "sessionActive_popup"
-            : classifySessionUrl(url);
-
-    logger.warn(`[session:${label}] state=${state} url=${url || "N/A"} cause=${cause || "N/A"}`);
-    return { state, url };
-}
-
-async function detectActivePopupSession(page) {
-    const body = await getNormalizedBodyText(page, 2500);
-    return body.includes(normalizeForMatch(ACTIVE_POPUP_SESSION_TEXT));
-}
-
-function getPageUrl(page) {
-    try {
-        return page && !page.isClosed() ? page.url() : "";
-    } catch {
-        return "";
-    }
-}
-
-async function waitForPageSettled(page, timeout = 30000) {
-    if (!page || page.isClosed()) {
-        throw new Error("Page cerrada antes de esperar carga.");
-    }
-
-    await page.waitForLoadState("domcontentloaded", { timeout });
-    await page.waitForLoadState("networkidle", { timeout: Math.min(timeout, 10000) }).catch(() => {});
-}
-
-async function recreatePageFrom(page, fallbackUrl, reason) {
-    const context = page?.context?.();
-    const targetUrl = getPageUrl(page) || fallbackUrl;
-
-    if (!context) {
-        throw new Error(`No se pudo recrear page: context no disponible. Motivo: ${reason}`);
-    }
-
-    logger.warn(`Recreando page despues de fallo de navegacion: ${reason}. targetUrl=${targetUrl || "N/A"}`);
-
-    if (page && !page.isClosed()) {
-        await page.close().catch(() => {});
-    }
-
-    try {
-        const nextPage = await context.newPage();
-
-        if (targetUrl) {
-            await gotoAndSettle(nextPage, targetUrl, "recreate-page", 30000);
-        }
-
-        return nextPage;
-    } catch (error) {
-        if (isBrowserClosedError(error) || isNavigationAbortError(error)) {
-            await BrowserManager.restart();
-            const browser = await BrowserManager.getBrowser();
-            const nextContext = await browser.newContext({ viewport: { width: 1366, height: 900 } });
-            const nextPage = await nextContext.newPage();
-
-            if (targetUrl) {
-                await gotoAndSettle(nextPage, targetUrl, "recreate-page-browser-restart", 30000);
-            }
-
-            return nextPage;
-        }
-
-        throw error;
-    }
-}
-
-async function resilientRefreshPage(page, {
-    label = "page",
-    fallbackUrl = "",
-    attempts = 2,
-    waitAfterMs = 800,
-} = {}) {
-    let currentPage = page;
-    let lastError = null;
-
-    for (let attempt = 1; attempt <= attempts; attempt += 1) {
-        if (!currentPage || currentPage.isClosed()) {
-            return recreatePageFrom(currentPage || page, fallbackUrl, `${label} cerrada antes de refresh`);
-        }
-
-        try {
-            await currentPage.waitForTimeout(waitAfterMs).catch(() => {});
-            await currentPage.waitForLoadState("domcontentloaded", { timeout: 10000 }).catch(() => {});
-
-            const currentUrl = getPageUrl(currentPage) || fallbackUrl;
-            if (!currentUrl) {
-                throw new Error(`No hay URL disponible para refrescar ${label}.`);
-            }
-
-            logger.debug(`Refrescando ${label} con navegacion resiliente. Intento ${attempt}/${attempts}.`);
-            await gotoAndSettle(currentPage, currentUrl, `refresh-${label}`, 30000);
-            return currentPage;
-        } catch (error) {
-            lastError = error;
-            logger.warn(`Refresh resiliente fallo en ${label} intento ${attempt}/${attempts}: ${error.message}`);
-
-            if (!isNavigationAbortError(error) && !isBrowserClosedError(error) && attempt < attempts) {
-                await currentPage.waitForTimeout(1000).catch(() => {});
-                continue;
-            }
-
-            if (attempt < attempts) {
-                await currentPage.waitForTimeout(1000).catch(() => {});
-            }
-        }
-    }
-
-    return recreatePageFrom(currentPage || page, fallbackUrl, lastError?.message || `${label} no pudo refrescarse`);
-}
-
-async function prepareFullQuoteScreenshot(popup) {
-    await popup.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
-
-    await popup.evaluate(() => {
-        const target = document.querySelector("#vehicleTotalAmount")
-            || document.querySelector("#vehicleVersion")
-            || document.querySelector("#vehiclePriceTax");
-
-        if (target && typeof target.scrollIntoView === "function") {
-            target.scrollIntoView({ block: "center", inline: "nearest" });
-        }
-
-        const visited = new Set();
-        let current = target instanceof Element ? target.parentElement : document.body;
-
-        while (current) {
-            if (!visited.has(current)) {
-                visited.add(current);
-                const computed = window.getComputedStyle(current);
-                const overflowY = computed.overflowY;
-                const overflow = computed.overflow;
-                const isScrollable = ["auto", "scroll"].includes(overflowY)
-                    || ["auto", "scroll"].includes(overflow)
-                    || current.scrollHeight > current.clientHeight + 20;
-
-                if (isScrollable) {
-                    current.style.overflow = "visible";
-                    current.style.overflowY = "visible";
-                    current.style.height = "auto";
-                    current.style.maxHeight = "none";
-                }
-            }
-
-            current = current.parentElement;
-        }
-
-        document.documentElement.style.scrollBehavior = "auto";
-        document.body.style.overflow = "visible";
-        document.body.style.height = "auto";
-        document.body.style.maxHeight = "none";
-    });
-
-    await popup.waitForTimeout(1200);
-}
-
-async function waitForValidQuoteScreen(popup, timeout = 45000) {
-    const start = Date.now();
-    let refreshes = 0;
-    const maxRefreshes = 3;
-    const validationsPerCycle = 3;
-    let currentPopup = popup;
-
-    while (Date.now() - start < timeout) {
-        let lastFailures = [];
-
-        for (let attempt = 1; attempt <= validationsPerCycle; attempt += 1) {
-            const failures = [];
-
-            try {
-                if (!currentPopup || currentPopup.isClosed()) {
-                    throw new Error("Popup cerrado durante validacion.");
-                }
-
-                await currentPopup.waitForTimeout(700);
-                validateSession(currentPopup);
-
-                if (!currentPopup.url().includes("cotizador")) {
-                    failures.push("url");
-                }
-
-                const body = await getLowerBodyText(currentPopup, 2000);
-                if (!body) {
-                    failures.push("body");
-                }
-
-                const normalizedBody = await getNormalizedBodyText(currentPopup, 1500);
-                if (isBadGatewayBody(normalizedBody)) {
-                    const diagPath = await captureDiagnosticScreenshot(currentPopup, "bad_gateway").catch(() => null);
-                    const error = createPortalUnavailableError(502, getPageUrl(currentPopup));
-                    if (diagPath) {
-                        error.screenshotPath = diagPath;
-                        error.errorScreenshotPath = diagPath;
-                    }
-                    throw error;
-                }
-
-                const overlay = await detectBlockingOverlay(currentPopup);
-                if (overlay.blocking) {
-                    failures.push("overlay_blocking");
-                }
-
-                try {
-                    const logo = currentPopup.locator("#header-logo").first();
-                    const count = await logo.count();
-                    if (count > 0 && !(await logo.isVisible({ timeout: VALIDATION_LOCATOR_TIMEOUT_MS }))) {
-                        failures.push("logo");
-                    }
-                } catch {
-                    // best-effort: no bloquear por cambios en el header del portal
-                }
-
-                // "Cotit" puede aparecer como overlay/transitorio; no se considera criterio de fallo
-
-                if (body.includes(READY_TEXT_RAZON_SOCIAL)) {
-                    failures.push("razon_social");
-                }
-
-                try {
-                    await currentPopup.waitForFunction(
-                        ({ selector, expectedValue }) => {
-                            const element = document.querySelector(selector);
-                            if (!element || element.tagName !== "SELECT" || element.disabled) {
-                                return false;
-                            }
-
-                            const options = Array.from(element.options || []);
-                            if (options.length === 0) {
-                                return false;
-                            }
-
-                            const current = String(element.value || "").trim();
-                            return current === String(expectedValue).trim();
-                        },
-                        { selector: TIPO_PERSONA_SELECTOR, expectedValue: TIPO_PERSONA_READY_VALUE },
-                        { timeout: VALIDATION_LOCATOR_TIMEOUT_MS }
-                    );
-                } catch {
-                    failures.push("customerType");
-                }
-
-                if (failures.length === 0) {
-                    logger.info("[popup] valid quote screen", {
-                        elapsedSeconds: Number(((Date.now() - start) / 1000).toFixed(2)),
-                        url: getPageUrl(currentPopup) || "N/A",
-                    });
-                    return currentPopup;
-                }
-
-                lastFailures = [...failures];
-                logger.debug(`Validacion ${attempt}/${validationsPerCycle} fallo`, { failures });
-            } catch (error) {
-                lastFailures = [`exception=${error.message}`];
-                logger.debug(`Validacion ${attempt}/${validationsPerCycle} lanzo error: ${error.message}`);
-            }
-        }
-
-        if (refreshes < maxRefreshes) {
-            refreshes += 1;
-            logger.warn(`Pantalla invalida. Refresh resiliente ${refreshes}/${maxRefreshes}`, { failures: lastFailures });
-            currentPopup = await resilientRefreshPage(currentPopup, {
-                label: "popup cotizador",
-                fallbackUrl: LOGIN_URL,
-            });
-            continue;
-        }
-
-        throw new Error(`Pantalla incorrecta tras varios refreshes: ${JSON.stringify(lastFailures)}`);
-    }
-
-    throw new Error("Timeout esperando pantalla correcta.");
-}
-
-async function createBrowserSession() {
-    assertCredentials();
-
-    const browser = await BrowserManager.getBrowser();
-    const activeContexts = getActiveContextCount();
-    const videoEnabled = isRecordVideoEnabled() && activeContexts <= 1;
-    const contextOptions = {
-        viewport: { width: 1366, height: 900 },
-    };
-
-    if (videoEnabled) {
-        contextOptions.recordVideo = { dir: VIDEOS_DIR };
-    }
-
-    let context = null;
-
-    try {
-        context = await browser.newContext(contextOptions);
-        const page = await context.newPage();
-
         return {
-            context,
-            page,
-            videoEnabled,
-        };
-    } catch (error) {
-        if (context) {
-            await context.close().catch(() => {});
-        }
-
-        if (isBrowserClosedError(error)) {
-            await BrowserManager.restart();
-        }
-
-        throw error;
-    }
-}
-
-function buildTaskArtifactPath(taskId, suffix, extension) {
-    if (!taskId) {
-        return null;
-    }
-
-    const safeTaskId = String(taskId).replace(/[^a-f0-9-]/gi, "_");
-    return path.join(VIDEOS_DIR, `${safeTaskId}_${suffix}.${extension}`);
-}
-
-function moveArtifact(sourcePath, targetPath) {
-    if (!sourcePath || !targetPath || !fs.existsSync(sourcePath)) {
-        return null;
-    }
-
-    fs.mkdirSync(path.dirname(targetPath), { recursive: true });
-
-    try {
-        if (fs.existsSync(targetPath)) {
-            fs.unlinkSync(targetPath);
-        }
-
-        fs.renameSync(sourcePath, targetPath);
-        return targetPath;
-    } catch {
-        fs.copyFileSync(sourcePath, targetPath);
-        return targetPath;
-    }
-}
-
-async function closeQuoteSession(popup) {
-    if (!popup || popup.isClosed()) {
-        return;
-    }
-
-    try {
-        const closeButton = popup.locator("#buttonClose").first();
-        await closeButton.waitFor({ state: "visible", timeout: 5000 });
-        await closeButton.click({ timeout: 5000 });
-
-        const confirmModal = popup.locator(".messager-body", {
-            hasText: /seguro.*salir.*cotizaci/i,
-        }).last();
-
-        await confirmModal.waitFor({ state: "visible", timeout: 7000 });
-        await confirmModal.locator("a.l-btn", { hasText: /^Ok$/ }).last().click({ timeout: 5000 });
-        await popup.waitForTimeout(1000);
-        logger.debug("Sesion de cotizacion cerrada desde buttonClose.");
-    } catch (error) {
-        logger.warn(`No se pudo cerrar sesion desde buttonClose: ${error.message}`);
-    }
-}
-
-async function performLogin(page) {
-    let loginPage = page;
-
-    logger.debug("Abriendo login...");
-    await gotoAndSettle(loginPage, LOGIN_URL, "login-open", 30000);
-    await logSessionState(loginPage, "login-open", "login inicial cargado");
-    validateSession(loginPage);
-
-    logger.debug("Ingresando usuario...");
-    await loginPage.waitForSelector('input[name="userName"]', { state: "visible", timeout: 20000 });
-    await loginPage.fill('input[name="userName"]', USUARIO);
-
-    logger.debug("Click primer ingresar...");
-    await loginPage.locator("#btnEntrar").click();
-    await loginPage.waitForLoadState("domcontentloaded", { timeout: 15000 }).catch(() => {});
-    await logSessionState(loginPage, "login-user", "usuario enviado");
-    validateSession(loginPage);
-
-    logger.debug("Ingresando password...");
-    await loginPage.waitForSelector('input[name="userPassword"]', { state: "visible", timeout: 20000 });
-    await loginPage.fill('input[name="userPassword"]', PASSWORD);
-
-    logger.debug("Click segundo ingresar y esperando popup...");
-    let popup = await waitForQuotePopupAfterPassword(loginPage);
-    logger.info("[popup] detected", {
-        url: getPageUrl(popup) || "N/A",
-        isSameAsLoginPage: popup === loginPage,
-        closed: Boolean(popup?.isClosed?.()),
-    });
-
-    registerDialogHandler(popup);
-
-    await runStep("popup-domcontentloaded", popup, async () => {
-        await popup.waitForLoadState("domcontentloaded", { timeout: 30000 });
-        await popup.waitForTimeout(250);
-    }, { timeoutMs: 35000, meta: { phase: "post-quote-popup" } });
-
-    popup = await runStep("popup-validate-quote-screen", popup, async () => waitForValidQuoteScreen(popup, 40000), {
-        timeoutMs: 50000,
-        meta: { phase: "post-quote-popup" },
-    });
-
-    await runStep("popup-validate-session", popup, async () => validateSession(popup), {
-        timeoutMs: 5000,
-        meta: { phase: "post-quote-popup" },
-    });
-
-    if (!popup.url().includes("cotizador")) {
-        throw new Error(`No llego al cotizador. URL actual: ${popup.url()}`);
-    }
-
-    return popup;
-}
-
-async function waitForQuotePopupAfterPassword(page) {
-    let context = page.context();
-    const pagesBeforeClick = new Set(context.pages());
-    const popupPromise = page.waitForEvent("popup", { timeout: POPUP_TIMEOUT_MS }).catch(() => null);
-    const pagePromise = context.waitForEvent("page", { timeout: POPUP_TIMEOUT_MS }).catch(() => null);
-
-    await page.locator("#btnEntrar").click();
-    await logSessionState(page, "login-password-click", "password enviado");
-    logger.debug(`Esperando ${SESSION_LOAD_WAIT_MS}ms a que cargue la sesion...`);
-    await page.waitForLoadState("domcontentloaded", { timeout: SESSION_LOAD_WAIT_MS }).catch(() => {});
-    await page.waitForTimeout(1000);
-    const loginPage = page;
-    context = loginPage.context();
-
-    const popup = await Promise.race([
-        popupPromise,
-        pagePromise,
-        waitForActivePopupMessage(loginPage),
-    ]);
-
-    if (popup) {
-        await logSessionState(popup, "quote-popup", "popup detectado despues de password");
-        return popup;
-    }
-
-    const quotePage = findAvailableQuotePage(context, loginPage, pagesBeforeClick);
-
-    if (quotePage) {
-        await logSessionState(quotePage, "quote-page", "pagina cotizador ya disponible");
-        return quotePage;
-    }
-
-    if (await detectActivePopupSession(loginPage)) {
-        await logSessionState(loginPage, "session-active", "portal reporta sesion activa en popup");
-        return reopenQuotePopup(loginPage, pagesBeforeClick);
-    }
-
-    logger.warn(`No se abrio popup de cotizador en ${POPUP_TIMEOUT_MS}ms. Intentando abrirlo sin marcar error.`);
-
-    const openedPopup = await openQuotePopupIfAvailable(loginPage, pagesBeforeClick);
-
-    if (openedPopup) {
-        await logSessionState(openedPopup, "quote-opened", "popup abierto por recovery local");
-        return openedPopup;
-    }
-
-    throw new Error("No se encontro una pagina de cotizador abierta despues de intentar abrir el popup.");
-}
-
-async function waitForActivePopupMessage(page) {
-    const deadline = Date.now() + POPUP_TIMEOUT_MS;
-
-    while (Date.now() < deadline) {
-        if (await detectActivePopupSession(page)) {
-            return null;
-        }
-
-        await page.waitForTimeout(500);
-    }
-
-    return null;
-}
-
-async function reopenQuotePopup(page, pagesBeforeClick) {
-    const context = page.context();
-
-    logger.warn("Sesion activa en ventana emergente. Reabriendo popup con btnReopen.");
-    await logSessionState(page, "reopen-popup", "sessionActive requiere btnReopen");
-
-    try {
-        await page.locator(REOPEN_POPUP_SELECTOR).waitFor({ state: "visible", timeout: 5000 });
-    } catch {
-        throw createNonRetryableError(
-            "Sesion activa en ventana emergente detectada, pero no se encontro el boton btnReopen."
-        );
-    }
-
-    const popupPromise = page.waitForEvent("popup", { timeout: POPUP_TIMEOUT_MS }).catch(() => null);
-    const pagePromise = context.waitForEvent("page", { timeout: POPUP_TIMEOUT_MS }).catch(() => null);
-
-    await page.locator(REOPEN_POPUP_SELECTOR).click({ timeout: 5000 });
-
-    const popup = await Promise.race([
-        popupPromise,
-        pagePromise,
-    ]);
-
-    if (popup) {
-        await logSessionState(popup, "reopen-popup-ok", "btnReopen abrio popup");
-        return popup;
-    }
-
-    const existingPopup = findAvailableQuotePage(context, page, pagesBeforeClick);
-
-    if (existingPopup) {
-        await logSessionState(existingPopup, "reopen-existing-popup", "btnReopen no emitio popup pero existe cotizador");
-        return existingPopup;
-    }
-
-    throw createNonRetryableError(
-        "Sesion activa en ventana emergente detectada, pero btnReopen no abrio el cotizador."
-    );
-}
-
-function findAvailableQuotePage(context, page, pagesBeforeClick) {
-    const pages = context.pages();
-    const newPopup = pages.find((candidate) => (
-        candidate !== page
-        && (!pagesBeforeClick || !pagesBeforeClick.has(candidate))
-        && !candidate.isClosed()
-    ));
-
-    if (newPopup) {
-        return newPopup;
-    }
-
-    const quotePopup = pages.find((candidate) => (
-        candidate !== page
-        && !candidate.isClosed()
-        && candidate.url().includes("cotizador")
-    ));
-
-    if (quotePopup) {
-        return quotePopup;
-    }
-
-    if (!page.isClosed() && page.url().includes("cotizador")) {
-        return page;
-    }
-
-    return null;
-}
-
-async function openQuotePopupIfAvailable(page, pagesBeforeClick) {
-    const context = page.context();
-    const reopenButton = page.locator(REOPEN_POPUP_SELECTOR).first();
-    const canReopen = await reopenButton.isVisible({ timeout: 3000 }).catch(() => false);
-
-    if (canReopen) {
-        logger.warn("Boton btnReopen disponible. Abriendo popup de cotizador.");
-        await logSessionState(page, "open-quote-reopen", "btnReopen visible");
-
-        const popupPromise = page.waitForEvent("popup", { timeout: POPUP_TIMEOUT_MS }).catch(() => null);
-        const pagePromise = context.waitForEvent("page", { timeout: POPUP_TIMEOUT_MS }).catch(() => null);
-
-        await reopenButton.click({ timeout: 5000 });
-
-        const popup = await Promise.race([
-            popupPromise,
-            pagePromise,
-        ]);
-
-        return popup || findAvailableQuotePage(context, page, pagesBeforeClick);
-    }
-
-    const enterButton = page.locator("#btnEntrar").first();
-    const canRetryEnter = await enterButton.isVisible({ timeout: 3000 }).catch(() => false);
-
-    if (canRetryEnter) {
-        logger.warn("Boton de ingreso disponible. Reintentando abrir popup de cotizador.");
-        await logSessionState(page, "open-quote-enter", "btnEntrar visible despues de login");
-
-        const popupPromise = page.waitForEvent("popup", { timeout: POPUP_TIMEOUT_MS }).catch(() => null);
-        const pagePromise = context.waitForEvent("page", { timeout: POPUP_TIMEOUT_MS }).catch(() => null);
-
-        await enterButton.click({ timeout: 5000 });
-
-        const popup = await Promise.race([
-            popupPromise,
-            pagePromise,
-            waitForActivePopupMessage(page),
-        ]);
-
-        if (popup) {
-            return popup;
-        }
-
-        if (await detectActivePopupSession(page)) {
-            return reopenQuotePopup(page, pagesBeforeClick);
-        }
-
-        return findAvailableQuotePage(context, page, pagesBeforeClick);
-    }
-
-    if (page.url().includes("cotizador")) {
-        return page;
-    }
-
-    return null;
-}
-
-function elapsedSecondsSince(startTime) {
-    return Number(((performance.now() - startTime) / 1000).toFixed(2));
-}
-
-function normalizeRequestedDataFlows(payload) {
-    const requestedFlows = payload?.flujos || payload?.flows;
-    const nivelDetalle = payload?.NIVEL_DETALLE || payload?.nivelDetalle || payload?.nivel_detalle;
-
-    if (Array.isArray(requestedFlows) && requestedFlows.length > 0) {
-        return requestedFlows.map((flow) => String(flow).trim().toLowerCase()).filter(Boolean);
-    }
-
-    if (nivelDetalle) {
-        return [String(nivelDetalle).trim().toLowerCase()];
-    }
-
-    const presentFlows = Object.keys(DATA_FLOWS).filter((flow) => payload?.[flow] !== undefined);
-    return presentFlows.length > 0 ? presentFlows : ["cliente"];
-}
-
-async function runRequestedDataFlows(page, payload) {
-    const flows = normalizeRequestedDataFlows(payload);
-    const timings = [];
-
-    for (const flow of flows) {
-        const fillFlow = DATA_FLOWS[flow];
-
-        if (!fillFlow) {
-            throw new Error(`Flujo no soportado: ${flow}`);
-        }
-
-        if (payload?.[flow] === undefined) {
-            throw new Error(`No viene el objeto ${flow} en el JSON`);
-        }
-
-        const flowStartTime = performance.now();
-        await runStep(`flow-${flow}`, page, async () => {
-            await fillFlow(page, payload);
-        }, {
-            timeoutMs: flow === "vehiculo" ? 240000 : 120000,
-            meta: { flow },
-        });
-        timings.push({
-            name: flow,
-            elapsedSeconds: elapsedSecondsSince(flowStartTime),
-        });
-    }
-
-    return { flows, timings };
-}
-
-async function runCetelemFlow(payload, options = {}) {
-    const taskId = options.taskId || null;
-    const timestamp = createTimestamp();
-    const screenshotPath = path.join(SCREENSHOTS_DIR, `playwright_popup_${timestamp}.png`);
-    const errorScreenshotPath = path.join(SCREENSHOTS_DIR, `playwright_error_${timestamp}.png`);
-    const consolePath = path.join(LOGS_DIR, `playwright_console_${timestamp}.txt`);
-    const consoleLogs = [];
-    const startTime = performance.now();
-
-    logTask(taskId, "queued", {}, { level: "debug" });
-
-    return enqueueContextTask(() => runCetelemFlowInContext({
-        payload,
-        taskId,
-        screenshotPath,
-        errorScreenshotPath,
-        consolePath,
-        consoleLogs,
-        startTime,
-    }));
-}
-
-async function runCetelemFlowInContext({
-    payload,
-    taskId,
-    screenshotPath,
-    errorScreenshotPath,
-    consolePath,
-    consoleLogs,
-    startTime,
-}) {
-    let context = null;
-    let page = null;
-    let videoEnabled = false;
-
-    let popup = null;
-
-    const onConsole = (message) => {
-        const text = message.text();
-        consoleLogs.push(text);
-        logger.debug(`BROWSER_CONSOLE: ${text}`);
-    };
-
-    try {
-        const session = await createBrowserSession();
-        context = session.context;
-        page = session.page;
-        videoEnabled = session.videoEnabled;
-
-        page.on("console", onConsole);
-        registerDialogHandler(page);
-
-        logTask(taskId, "started", {
-            elapsedSeconds: elapsedSecondsSince(startTime),
-            videoEnabled,
-        });
-        logger.debug(`Carpeta de videos: ${VIDEOS_DIR}`);
-        const loginStartTime = performance.now();
-        popup = await performLogin(page);
-        context = popup.context();
-        const loginElapsedSeconds = elapsedSecondsSince(loginStartTime);
-        popup.on("console", onConsole);
-        registerDialogHandler(popup);
-
-        const { flows: executedFlows, timings: flowTimings } = await runStep("run-data-flows", popup, async () => (
-            runRequestedDataFlows(popup, payload)
-        ), {
-            timeoutMs: 300000,
-            meta: { flowsRequested: normalizeRequestedDataFlows(payload) },
-        });
-        const stageTimings = [
-            {
-                name: "login",
-                elapsedSeconds: loginElapsedSeconds,
-            },
-            ...flowTimings,
-        ];
-        let insuranceMonthlyFee = null;
-        let insuranceOptions = [];
-        let vehiclePriceTax = null;
-        let vehicleTotalAmount = null;
-
-        if (executedFlows.includes("vehiculo")) {
-            try {
-                vehiclePriceTax = await runStep("read-vehiclePriceTax", popup, async () => readVehiclePriceTax(popup), {
-                    timeoutMs: 30000,
-                });
-            } catch (error) {
-                logger.warn(`No se pudo leer vehiclePriceTax: ${error.message}`);
-            }
-
-            try {
-                vehicleTotalAmount = await runStep("read-vehicleTotalAmount", popup, async () => readVehicleTotalAmount(popup), {
-                    timeoutMs: 30000,
-                });
-            } catch (error) {
-                logger.warn(`No se pudo leer vehicleTotalAmount: ${error.message}`);
-            }
-        }
-
-        if (executedFlows.includes("seguro")) {
-            try {
-                insuranceOptions = await runStep("read-insuranceOptions", popup, async () => readInsuranceOptions(popup), {
-                    timeoutMs: 30000,
-                });
-            } catch (error) {
-                logger.warn(`No se pudieron leer opciones de seguro: ${error.message}`);
-            }
-
-            try {
-                insuranceMonthlyFee = await runStep("read-insuranceMonthlyFee", popup, async () => readInsuranceMonthlyFee(popup), {
-                    timeoutMs: 30000,
-                });
-            } catch (error) {
-                logger.warn(`No se pudo leer insuranceMonthlyFee: ${error.message}`);
-            }
-        }
-
-        await runStep("prepare-screenshot", popup, async () => prepareFullQuoteScreenshot(popup), {
-            timeoutMs: 45000,
-        });
-
-        const screenshotBuffer = await runStep("take-screenshot", popup, async () => (
-            popup.screenshot({
-                path: screenshotPath,
-                type: "png",
-                fullPage: true,
-            })
-        ), {
-            timeoutMs: 60000,
-            meta: { screenshotPath },
-        });
-
-        await runStep("write-console-log", popup, async () => {
-            fs.writeFileSync(consolePath, consoleLogs.join("\n"), "utf8");
-        }, {
-            timeoutMs: 5000,
-            meta: { consolePath, consoleLines: consoleLogs.length },
-        });
-
-        return {
-            consolePath,
-            elapsedSeconds: Number(((performance.now() - startTime) / 1000).toFixed(2)),
-            screenshotBuffer,
+            ok: true,
             screenshotPath,
-            executedFlows,
-            stageTimings,
-            insuranceMonthlyFee,
-            insuranceOptions,
-            vehiclePriceTax,
-            vehicleTotalAmount,
         };
-    } catch (error) {
-        const target = popup || page;
-        await logSessionState(target, "task-failed", error.message).catch(() => {});
-
-        if (isBrowserClosedError(error)) {
-            await BrowserManager.restart();
-        }
-
-        error.elapsedSeconds = elapsedSecondsSince(startTime);
-        error.consolePath = consolePath;
-
-        try {
-            if (!target) {
-                throw new Error("No hay page disponible para screenshot de error");
-            }
-            if (popup) {
-                await prepareFullQuoteScreenshot(popup).catch(() => {});
-            }
-            await target.screenshot({
-                path: errorScreenshotPath,
-                type: "png",
-                fullPage: true,
-            });
-            error.errorScreenshotPath = errorScreenshotPath;
-            if (!error.screenshotPath) {
-                error.screenshotPath = errorScreenshotPath;
-            }
-            logger.warn(`Screenshot error: ${errorScreenshotPath}`);
-        } catch {
-            // no-op
-        }
-
-        try {
-            fs.writeFileSync(consolePath, consoleLogs.join("\n"), "utf8");
-            error.consolePath = consolePath;
-            logger.debug(`Console log: ${consolePath}`);
-        } catch {
-            // no-op
-        }
-
-        throw error;
     } finally {
-        logTask(taskId, "stopping", {
-            elapsedSeconds: elapsedSecondsSince(startTime),
-        }, { level: "debug" });
-
-        let pageVideo = null;
-        let popupVideo = null;
-
-        try {
-            pageVideo = videoEnabled && page ? await page.video()?.path() : null;
-        } catch {
-            // no-op
-        }
-
-        try {
-            popupVideo = videoEnabled && popup ? await popup.video()?.path() : null;
-        } catch {
-            // no-op
-        }
-
-        try {
-            if (popup) {
-                logger.debug("Cerrando popup sin buttonClose; recovery usa cierre de page/context.");
-                await popup.close();
-            }
-        } catch {
-            // no-op
-        }
-
-        try {
-            if (page) {
-                logger.debug("Cerrando login page sin logout UI.");
-                await page.close();
-            }
-        } catch {
-            // no-op
-        }
-
-        try {
-            if (context) {
-                logger.debug(`[task:${taskId || "cli"}] Cerrando contexto Playwright completo.`);
-                await context.close();
-            }
-        } catch (error) {
-            logger.warn(`[task:${taskId || "cli"}] No se pudo cerrar context: ${error.message}`);
-        }
-
-        const taskPageVideo = moveArtifact(pageVideo, buildTaskArtifactPath(taskId, "page", "webm"));
-        const taskPopupVideo = moveArtifact(popupVideo, buildTaskArtifactPath(taskId, "popup", "webm"));
-
-        logger.debug(`Video page: ${taskPageVideo || pageVideo || "N/A"}`);
-        logger.debug(`Video popup: ${taskPopupVideo || popupVideo || "N/A"}`);
-        logTask(taskId, "stopped", {
-            elapsedSeconds: elapsedSecondsSince(startTime),
-        }, { level: "debug" });
+        if (popup) await popup.close().catch(() => { });
+        await page.close().catch(() => { });
+        await context.close().catch(() => { });
     }
 }
 
-async function runCetelemFlowWithRetries(payload, options = {}) {
-    let lastError;
-
-    for (let attempt = 1; attempt <= MAX_REINTENTOS; attempt += 1) {
-        try {
-            logger.debug(`[task ${shortTaskId(options.taskId)}] attempt ${attempt}/${MAX_REINTENTOS} recovery=clean_context_per_attempt`);
-            return await runCetelemFlow(payload, options);
-        } catch (error) {
-            lastError = error;
-            const retryable = error.retryable !== false;
-            logger.warn(`[task ${shortTaskId(options.taskId)}] recovery cause="${error.message}" attempt=${attempt}/${MAX_REINTENTOS} retryable=${retryable} action=context_closed_and_recreated_on_next_attempt`);
-
-            if (error.retryable === false) {
-                break;
-            }
-
-            if (attempt < MAX_REINTENTOS) {
-                logger.debug(`[task ${shortTaskId(options.taskId)}] reintentando con browser context limpio`);
-            }
-        }
-    }
-
-    throw lastError;
+async function runCetelemFlowWithRetries(payload, options) {
+    return runCetelemFlow(payload, options);
 }
 
-module.exports = {
-    normalizeRequestedDataFlows,
-    runCetelemFlow,
-    runCetelemFlowWithRetries,
-    runRequestedDataFlows,
-};
+module.exports = { runCetelemFlow, runCetelemFlowWithRetries };

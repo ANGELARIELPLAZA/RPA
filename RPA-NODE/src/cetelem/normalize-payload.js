@@ -1,4 +1,4 @@
-const logger = require("../core/logger");
+const logger = require("../../../RPA-NODE-V2/core/logger");
 
 const FLOW_ALIASES = {
     cliente: "cliente",
