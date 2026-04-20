@@ -30,6 +30,47 @@ function formatearSalidaCliente(data) {
     const status = String(data?.status ?? "").toLowerCase();
     const nivel_detalle = normalizeNivelDetalle(data?.nivel_detalle ?? data?.nivelDetalle);
 
+    if (nivel_detalle === "guardar_cotizacion") {
+        const result = data?.result && typeof data.result === "object" ? data.result : {};
+
+        if (status === "completado") {
+            return {
+                folio: result?.folio ?? null,
+                rfc_calculado: result?.rfc_calculado ?? null,
+                mensualidad: Number(result?.mensualidad ?? 0) || 0.0,
+                importe_pago_13: Number(result?.importe_pago_13 ?? 0) || 0.0,
+                estatus_code: Number.isFinite(Number(result?.estatus_code)) ? Number(result.estatus_code) : (result?.folio ? 1 : 0),
+                mensaje_det: String(result?.mensaje_det ?? (result?.folio ? "EXITOSO" : "Error")),
+                logs: Array.isArray(result?.logs) ? result.logs : [],
+                phase_durations: result?.phase_durations && typeof result.phase_durations === "object" ? result.phase_durations : {},
+            };
+        }
+
+        if (status === "fallido") {
+            return {
+                folio: null,
+                rfc_calculado: null,
+                mensualidad: 0.0,
+                importe_pago_13: 0.0,
+                estatus_code: 0,
+                mensaje_det: sanitizeDetalle(data?.detalle),
+                logs: [],
+                phase_durations: {},
+            };
+        }
+
+        return {
+            folio: null,
+            rfc_calculado: null,
+            mensualidad: 0.0,
+            importe_pago_13: 0.0,
+            estatus_code: 2,
+            mensaje_det: sanitizeDetalle(data?.detalle ?? data?.status ?? "En progreso"),
+            logs: [],
+            phase_durations: {},
+        };
+    }
+
     if (status === "completado") {
         const primas = Array.isArray(data?.primas_seguros) ? data.primas_seguros : [];
         const primas_formateadas = primas.map((p) => ({

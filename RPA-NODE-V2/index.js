@@ -584,23 +584,13 @@ async function etapaAbrirCotizador(popup) {
     await popup.waitForLoadState("domcontentloaded");
     await popup.waitForTimeout(1500);
 
-    // A veces el cotizador no termina de "activar" la vista hasta recibir una interacción.
-    // Reintenta Enter en el popup para estabilizar la pantalla inicial.
-    await popup.bringToFront().catch(() => { });
-    await popup.mouse.click(10, 10).catch(() => { });
-    for (let i = 0; i < 2; i += 1) {
-        await popup.keyboard.press("Enter").catch(() => { });
-        await popup.waitForTimeout(500);
-    }
+    await popup.goto("https://cck.creditoclick.com.mx/cotizador/01-cotizacion.html", {
+        waitUntil: "domcontentloaded",
+        timeout: 60000,
+    });
+    await popup.waitForTimeout(1500);
 
-    // Forzar ubicarse en el breadcrumb "COTIZACIÓN" (paso 1) para asegurar que el formulario se habilite.
-    await esperarOverlayCarga(popup, { timeout: 30000 });
-    const breadcrumb = popup.locator("#18n_breadcrumbs_quote").first();
-    await breadcrumb.waitFor({ state: "visible", timeout: 30000 });
-    await breadcrumb.scrollIntoViewIfNeeded().catch(() => { });
-    await breadcrumb.click({ timeout: 30000 });
-    await esperarOverlayCarga(popup, { timeout: 30000 });
-    await popup.waitForTimeout(800);
+    
 }
 
 /* =========================
@@ -611,21 +601,29 @@ async function etapaCliente(popup, data) {
 
     //const opcionesOk = await esperarOpcionesORecargar(popup, "#customerType", { timeout: 8000, maxReloads: 2 });
 
+    if (empty(c.customerName)) throw new Error("Falta campo requerido: customerName");
+    if (empty(c.customerAPaterno)) throw new Error("Falta campo requerido: customerAPaterno");
+    if (empty(c.customerBirthDate)) throw new Error("Falta campo requerido: customerBirthDate");
+    
     await esperarYSeleccionar(popup, "#customerType", c.customerType, 60000);
     await esperarYSeleccionar(popup, "#genero", c.genero);
     await esperarYSeleccionar(popup, "#customerTitle", c.customerTitle);
 
     await esperarYLlenarUpper(popup, "#customerName", c.customerName);
     await esperarYLlenarUpper(popup, "#customerAPaterno", c.customerAPaterno);
-    await esperarYLlenarUpper(popup, "#customerAMaterno", c.customerAMaterno);
+
+    if (!empty(c.customerAMaterno)) {
+        await esperarYLlenarUpper(popup, "#customerAMaterno", c.customerAMaterno);
+    }
 
     await fillBirthDateMasked(popup, "#customerBirthDate", c.customerBirthDate);
     await popup.waitForTimeout(1000);
 
-    await esperarYLlenarUpper(popup, "#customerRfc", c.customerRfc);
-    await popup.fill("#customerRfc", c.customerRfc);
-    await popup.mouse.click(10, 10);
-    await popup.waitForTimeout(1000);
+    if (!empty(c.customerRfc)) {
+        await esperarYLlenarUpper(popup, "#customerRfc", c.customerRfc);
+        await popup.mouse.click(10, 10);
+        await popup.waitForTimeout(1000);
+    }
 }
 
 /* =========================
@@ -816,6 +814,289 @@ async function etapaSeguro(popup, data) {
     ];
 }
 
+function parseMoneyNumber(value) {
+    const raw = String(value ?? "").trim();
+    if (!raw) return 0.0;
+    const cleaned = raw.replace(/[$\s]/g, "").replace(/,/g, "").replace(/[^\d.-]/g, "");
+    const num = Number.parseFloat(cleaned);
+    return Number.isFinite(num) ? num : 0.0;
+}
+
+async function readValueByLabel(page, labelText) {
+    const desired = String(labelText || "").trim().toLowerCase();
+    if (!desired) return "";
+
+    return page.evaluate((labelLower) => {
+        const normalize = (s) => String(s || "").replace(/\s+/g, " ").trim().toLowerCase();
+
+        const candidates = Array.from(document.querySelectorAll("label,td,th,span,div"))
+            .map((el) => ({ el, text: normalize(el.textContent) }))
+            .filter((x) => x.text && (x.text === labelLower || x.text.startsWith(labelLower)));
+
+        const pickValueFrom = (root) => {
+            if (!root) return "";
+            const input = root.querySelector("input,textarea,select");
+            if (input) {
+                if ("value" in input) return String(input.value || "").trim();
+                return String(input.textContent || "").trim();
+            }
+            const maybeText = root.querySelector("span,strong,b");
+            return String(maybeText?.textContent || "").trim();
+        };
+
+        for (const c of candidates) {
+            const el = c.el;
+            if (!el) continue;
+
+            if (el.tagName === "LABEL") {
+                const htmlFor = el.getAttribute("for");
+                if (htmlFor) {
+                    const target = document.getElementById(htmlFor);
+                    const v = target && ("value" in target) ? String(target.value || "").trim() : "";
+                    if (v) return v;
+                }
+            }
+
+            const parent = el.parentElement;
+            const sibling = el.nextElementSibling;
+
+            const v1 = pickValueFrom(sibling);
+            if (v1) return v1;
+
+            const v2 = pickValueFrom(parent);
+            if (v2 && normalize(v2) !== c.text) return v2;
+
+            const row = el.closest("tr");
+            const v3 = pickValueFrom(row);
+            if (v3 && normalize(v3) !== c.text) return v3;
+        }
+
+        return "";
+    }, desired).catch(() => "");
+}
+
+
+/* =========================
+   ETAPA 8 - Guardar cotizacion
+========================= */
+async function clickGuardarCotizacion(popup) {
+    const btn = popup.locator('#buttonSave').first();
+
+    await btn.waitFor({
+        state: 'visible',
+        timeout: 10000
+    });
+
+    await btn.scrollIntoViewIfNeeded().catch(() => {});
+
+    try {
+        await btn.click({ timeout: 5000 });
+    } catch {
+        await btn.click({ force: true });
+    }
+
+    return true;
+}
+
+async function etapaGuardarCotizacion(popup, data) {
+    const hooks = popup?.__rpaHooks;
+
+    const cot = data?.cotizacion || {};
+
+    // Campos de anualidad (si existen)
+    if (!empty(cot.annuityMonth)) {
+        const monthValue = normalizeAnnuityMonth(cot.annuityMonth);
+        await esperarYSeleccionar(popup, "#annuityMonth", monthValue, 60000);
+    }
+
+    if (cot.annuityAmount !== undefined && cot.annuityAmount !== null && String(cot.annuityAmount).trim() !== "") {
+        await esperarYLlenar(popup, "#annuityAmount", cot.annuityAmount);
+        await popup.mouse.click(10, 10).catch(() => { });
+        await popup.waitForTimeout(500);
+    }
+
+    const maxWaitSeconds = 20;
+    const waitIntervalMs = 500;
+    const maxSaveAttempts = 2;
+    const saveData = {};
+
+    const routeHandler = async (route) => {
+        const response = await route.fetch();
+        try {
+            const jsonData = await response.json().catch(() => null);
+            if (jsonData && typeof jsonData === "object") {
+                saveData.folio = normalizeString(jsonData.folio ?? jsonData.numCotizacion ?? jsonData.num_cotizacion ?? "");
+                const mensualidadRaw = jsonData.mensualidad ?? jsonData.mensualiteAvecASM ?? 0.0;
+                saveData.mensualidad = Number(mensualidadRaw) || 0.0;
+                saveData.backend = jsonData;
+            }
+        } catch {
+            // noop
+        }
+        await route.fulfill({ response });
+    };
+
+    await popup.route("**/cotizacion/save", routeHandler);
+
+    let folio = null;
+    let mensualidad = 0.0;
+    let backendJson = null;
+
+    try {
+        for (let attempt = 1; attempt <= maxSaveAttempts; attempt += 1) {
+            saveData.folio = "";
+            saveData.mensualidad = 0.0;
+            saveData.backend = null;
+
+            if (hooks?.onProgress) {
+                await hooks.onProgress({
+                    page: popup,
+                    message: attempt === 1 ? "Guardando cotizacion" : `Reintentando guardar cotizacion (${attempt}/${maxSaveAttempts})`,
+                }).catch(() => { });
+            }
+
+            const clicked = await clickGuardarCotizacion(popup);
+            if (!clicked) {
+                return {
+                    folio: null,
+                    rfc_calculado: null,
+                    mensualidad: 0.0,
+                    importe_pago_13: 0.0,
+                    estatus_code: 0,
+                    mensaje_det: "Error: No se encontro boton para guardar cotizacion.",
+                    logs: [],
+                    phase_durations: {},
+                };
+            }
+
+            let waitedMs = 0;
+            while (waitedMs < maxWaitSeconds * 1000 && empty(saveData.folio)) {
+                await popup.waitForTimeout(waitIntervalMs);
+                waitedMs += waitIntervalMs;
+            }
+
+            folio = normalizeString(saveData.folio) || null;
+            mensualidad = Number(saveData.mensualidad) || 0.0;
+            backendJson = saveData.backend && typeof saveData.backend === "object" ? saveData.backend : null;
+
+            if (folio) break;
+
+            if (attempt < maxSaveAttempts) {
+                await esperarOverlayCarga(popup, { timeout: 30000 }).catch(() => { });
+            }
+        }
+    } finally {
+        await popup.unroute("**/cotizacion/save", routeHandler).catch(() => { });
+    }
+
+    const rfc =
+        normalizeString(backendJson?.rfc_calculado) ||
+        normalizeString(await popup.locator("#customerRfc").first().inputValue().catch(() => "")) ||
+        null;
+
+    const pago13Raw =
+        normalizeString(backendJson?.importe_pago_13) ||
+        (await popup.locator("#importe_pago_13:visible").first().inputValue().catch(() => "")) ||
+        (await popup.locator("#importe_pago_13").first().inputValue().catch(() => "")) ||
+        (await readValueByLabel(popup, "importe pago 13")) ||
+        (await readValueByLabel(popup, "importe pago 13:"));
+
+    const importe_pago_13 = parseMoneyNumber(pago13Raw);
+
+    if (!folio) {
+        const msg = "Error: No se recibio folio del servidor tras el guardado.";
+        if (hooks?.onProgress) {
+            await hooks.onProgress({ page: popup, message: msg }).catch(() => { });
+        }
+
+        return {
+            folio: null,
+            rfc_calculado: rfc,
+            mensualidad: mensualidad || 0.0,
+            importe_pago_13: importe_pago_13 || 0.0,
+            estatus_code: 0,
+            mensaje_det: msg,
+            logs: Array.isArray(backendJson?.logs) ? backendJson.logs : [],
+            phase_durations: backendJson?.phase_durations && typeof backendJson.phase_durations === "object" ? backendJson.phase_durations : {},
+        };
+    }
+
+    // Cierra popup de "Cotizacion guardada exitosamente" si aparece.
+    await cerrarPopupGuardadoSiExiste(popup).catch(() => { });
+
+    // Si hay folio, abrir impresión (best-effort)
+    await popup.locator('a:has-text("Imprimir")').first().click({ timeout: 8000 }).catch(() => { });
+    await popup.waitForTimeout(500);
+    await popup.locator('a:has-text("Imprimir Cotización"), a:has-text("Imprimir Cotizacion")').first().click({ timeout: 8000 }).catch(() => { });
+
+    return {
+        folio,
+        rfc_calculado: rfc,
+        mensualidad: mensualidad || 0.0,
+        importe_pago_13: importe_pago_13 || 0.0,
+        estatus_code: 1,
+        mensaje_det: "EXITOSO",
+        logs: Array.isArray(backendJson?.logs) ? backendJson.logs : [],
+        phase_durations: backendJson?.phase_durations && typeof backendJson.phase_durations === "object" ? backendJson.phase_durations : {},
+    };
+}
+
+async function cerrarPopupGuardadoSiExiste(page, { timeout = 8000 } = {}) {
+    const popup = page.locator(".messager-body:visible").first();
+    const start = Date.now();
+
+    while (Date.now() - start < timeout) {
+        const visible = await popup.isVisible().catch(() => false);
+        if (!visible) return false;
+
+        const okBtn = popup.locator('.messager-button a:has-text("Ok"), .messager-button a:has-text("OK"), .messager-button a:has-text("Aceptar")').first();
+        const okVisible = await okBtn.isVisible().catch(() => false);
+        if (okVisible) {
+            await okBtn.click({ timeout: 3000 }).catch(async () => {
+                await okBtn.click({ timeout: 3000, force: true }).catch(() => { });
+            });
+            await page.waitForTimeout(300);
+        } else {
+            // Si no hay botón detectable, intenta Escape.
+            await page.keyboard.press("Escape").catch(() => { });
+            await page.waitForTimeout(300);
+        }
+
+        const still = await popup.isVisible().catch(() => false);
+        if (!still) return true;
+
+        await page.waitForTimeout(250);
+    }
+
+    return false;
+}
+
+function normalizeAnnuityMonth(value) {
+    const raw = normalizeString(value);
+    if (!raw) return "";
+    const digits = raw.match(/\d+/)?.[0] || "";
+    if (digits) return String(Number(digits)).padStart(2, "0");
+
+    const key = raw.toLowerCase();
+    const map = {
+        enero: "01",
+        febrero: "02",
+        marzo: "03",
+        abril: "04",
+        mayo: "05",
+        junio: "06",
+        julio: "07",
+        agosto: "08",
+        septiembre: "09",
+        setiembre: "09",
+        octubre: "10",
+        noviembre: "11",
+        diciembre: "12",
+    };
+
+    return map[key] || raw;
+}
+
 function isBadGatewayText(value) {
     const text = String(value || "").toLowerCase();
     return text.includes("502 bad gateway") || text.includes("bad gateway");
@@ -975,6 +1256,7 @@ async function runCetelemFlow(payload, hooks = {}) {
 
         const nivelDetalle = normalizeString(data?.nivel_detalle ?? data?.nivelDetalle).toLowerCase();
         const isSeguros = nivelDetalle === "seguros";
+        const isGuardarCotizacion = nivelDetalle === "guardar_cotizacion";
         const skipCliente = isSeguros;
 
         if (!skipCliente && data?.cliente && Object.keys(data.cliente).length) {
@@ -999,11 +1281,16 @@ async function runCetelemFlow(payload, hooks = {}) {
             seguroResult = await stage("seguro", async () => etapaSeguro(popup, data));
         }
 
+        let guardarResult = null;
+        if (isGuardarCotizacion) {
+            guardarResult = await stage("guardar_cotizacion", async () => etapaGuardarCotizacion(popup, data));
+        }
+
         await stage("finalizando", async () => { });
 
         return {
             ok: true,
-            result: seguroResult,
+            result: isGuardarCotizacion ? guardarResult : seguroResult,
         };
     } catch (error) {
         if (hooks.onErrorScreenshot) {

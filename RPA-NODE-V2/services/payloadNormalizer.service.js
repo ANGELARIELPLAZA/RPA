@@ -7,8 +7,85 @@ function normalizeNivelDetalle(value) {
     return raw ? raw.toLowerCase() : "";
 }
 
+function normalizeCotizacion(value) {
+    const cotizacion = isObject(value) ? { ...value } : {};
+
+    function empty(value) {
+        return value === undefined ||
+            value === null ||
+            String(value).trim() === "";
+    }
+
+    if (empty(cotizacion.annuityMonth) && !empty(cotizacion.mes_anualidad)) {
+        cotizacion.annuityMonth = cotizacion.mes_anualidad;
+    }
+
+    if (empty(cotizacion.annuityAmount) && !empty(cotizacion.anualidad_cliente)) {
+        cotizacion.annuityAmount = cotizacion.anualidad_cliente;
+    }
+    // Normaliza a strings (inputs/selects suelen comparar strings)
+    for (const key of ["annuityMonth", "annuityAmount"]) {
+        if (cotizacion[key] !== undefined && cotizacion[key] !== null) {
+            cotizacion[key] = String(cotizacion[key]).trim();
+        }
+    }
+
+    return cotizacion;
+}
+
 function normalizeCliente(value) {
     const cliente = isObject(value) ? { ...value } : {};
+
+    // Alias comunes: nombre / apellidos (payload externo)
+    if (cliente.customerName === undefined) {
+        cliente.customerName =
+            cliente.nombre ??
+            cliente.name ??
+            cliente.first_name ??
+            cliente.firstName;
+    }
+
+    if (cliente.customerAPaterno === undefined) {
+        cliente.customerAPaterno =
+            cliente.apellido_paterno ??
+            cliente.apellidoPaterno ??
+            cliente.apellidoP ??
+            cliente.paterno ??
+            cliente.last_name ??
+            cliente.lastName;
+    }
+
+    if (cliente.customerAMaterno === undefined) {
+        cliente.customerAMaterno =
+            cliente.apellido_materno ??
+            cliente.apellidoMaterno ??
+            cliente.apellidoM ??
+            cliente.materno ??
+            cliente.second_last_name ??
+            cliente.secondLastName;
+    }
+
+    if (cliente.customerBirthDate === undefined) {
+        cliente.customerBirthDate =
+            cliente.fecha_nacimiento ??
+            cliente.fechaNacimiento ??
+            cliente.birth_date ??
+            cliente.birthDate;
+    }
+
+    if (cliente.customerRfc === undefined) {
+        cliente.customerRfc =
+            cliente.rfc ??
+            cliente.RFC;
+    }
+
+    if (cliente.customerNumUnidades === undefined) {
+        cliente.customerNumUnidades =
+            cliente.numero_unidades_solicitar ??
+            cliente.numeroUnidadesSolicitar ??
+            cliente.num_unidades ??
+            cliente.numUnidades;
+    }
 
     // Alias: tipo_persona -> customerType
     if (cliente.customerType === undefined && cliente.tipo_persona !== undefined) {
@@ -18,6 +95,23 @@ function normalizeCliente(value) {
     // Alias: titulo -> customerTitle
     if (cliente.customerTitle === undefined && cliente.titulo !== undefined) {
         cliente.customerTitle = cliente.titulo;
+    }
+
+    // Normaliza tipos esperados (selects/inputs suelen comparar strings)
+    for (const key of [
+        "customerType",
+        "genero",
+        "customerTitle",
+        "customerName",
+        "customerAPaterno",
+        "customerAMaterno",
+        "customerBirthDate",
+        "customerRfc",
+        "customerNumUnidades",
+    ]) {
+        if (cliente[key] !== undefined && cliente[key] !== null) {
+            cliente[key] = String(cliente[key]).trim();
+        }
     }
 
     return cliente;
@@ -189,6 +283,12 @@ function normalizeFormatoA(body) {
         ...(body.nivel_detalle !== undefined || body.nivelDetalle !== undefined
             ? { nivel_detalle: normalizeNivelDetalle(body.nivel_detalle ?? body.nivelDetalle) }
             : {}),
+        cotizacion: normalizeCotizacion({
+            mes_anualidad: body.mes_anualidad,
+            annuityMonth: body.annuityMonth,
+            importe_anualidad: body.importe_anualidad,
+            annuityAmount: body.annuityAmount,
+        }),
         cliente: normalizeCliente(body.cliente),
         vehiculo: normalizeVehiculo(body.vehiculo),
         credito: normalizeCredito(body.credito),
@@ -197,12 +297,29 @@ function normalizeFormatoA(body) {
 }
 
 function normalizeFormatoB(body) {
+    const cotizacionKeys = [
+        "mes_anualidad",
+        "annuityMonth",
+        "importe_anualidad",
+        "annuityAmount",
+        "mes_primer_pago",
+        "mesPrimerPago",
+        "anualidad_cliente",
+        "anualidadCliente",
+    ];
+
     const clienteKeys = [
         "tipo_persona",
         "customerType",
         "genero",
         "titulo",
         "customerTitle",
+        "nombre",
+        "apellido_paterno",
+        "apellido_materno",
+        "fecha_nacimiento",
+        "rfc",
+        "numero_unidades_solicitar",
         "customerName",
         "customerAPaterno",
         "customerAMaterno",
@@ -276,6 +393,7 @@ function normalizeFormatoB(body) {
         ...(body.nivel_detalle !== undefined || body.nivelDetalle !== undefined
             ? { nivel_detalle: normalizeNivelDetalle(body.nivel_detalle ?? body.nivelDetalle) }
             : {}),
+        cotizacion: normalizeCotizacion(pick(body, cotizacionKeys)),
         cliente: normalizeCliente(pick(body, clienteKeys)),
         vehiculo: normalizeVehiculo(pick(body, vehiculoKeys)),
         credito: normalizeCredito(pick(body, creditoKeys)),
