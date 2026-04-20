@@ -263,7 +263,7 @@ async function runCetelemFlow(payload) {
             }
 
             console.log("Seleccionando customerType:", customerType);
-            await popup.waitForSelector("#customerType", { state: "visible", timeout: 15000 });
+            await popup.waitForSelector("#customerType", { state: "visible", timeout: 60000 });
             await popup.selectOption("#customerType", customerType);
 
             await popup.waitForTimeout(1000);
