@@ -33,6 +33,9 @@ function isCetelemIntermitenteClickTimeout(errorMessage) {
 
 function buildTaskDetalle(error) {
     const raw = error?.message ? String(error.message) : "";
+    if (/502\s+bad\s+gateway/i.test(raw) || /\bbad\s+gateway\b/i.test(raw)) {
+        return "portal de cetelem fuera de servicio";
+    }
     if (isCetelemIntermitenteClickTimeout(raw)) {
         return "portal de cetelem con intermitencias: pantalla de carga bloqueo el click en 'Ingresar'";
     }
