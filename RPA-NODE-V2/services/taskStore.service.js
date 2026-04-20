@@ -53,7 +53,7 @@ function mapPrimasSegurosFromResult(result) {
             anualidad_requerida: true,
             rango_anualidad: { minimo: null, maximo: null },
         }))
-        .filter((x) => x.aseguradora && x.monto !== null);
+        .filter((x) => x.aseguradora && x.monto !== null && x.monto !== 0);
 }
 
 function toPublicStatus(task, { includePayload = false, includeScreenshotBase64 = true } = {}) {

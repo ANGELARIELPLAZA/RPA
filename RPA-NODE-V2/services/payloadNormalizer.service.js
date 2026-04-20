@@ -7,6 +7,17 @@ function normalizeNivelDetalle(value) {
     return raw ? raw.toLowerCase() : "";
 }
 
+function normalizeCliente(value) {
+    const cliente = isObject(value) ? { ...value } : {};
+
+    // Alias: tipo_persona -> customerType
+    if (cliente.customerType === undefined && cliente.tipo_persona !== undefined) {
+        cliente.customerType = cliente.tipo_persona;
+    }
+
+    return cliente;
+}
+
 function normalizeVehiculo(value) {
     const vehiculo = isObject(value) ? { ...value } : {};
 
@@ -173,7 +184,7 @@ function normalizeFormatoA(body) {
         ...(body.nivel_detalle !== undefined || body.nivelDetalle !== undefined
             ? { nivel_detalle: normalizeNivelDetalle(body.nivel_detalle ?? body.nivelDetalle) }
             : {}),
-        cliente: isObject(body.cliente) ? body.cliente : {},
+        cliente: normalizeCliente(body.cliente),
         vehiculo: normalizeVehiculo(body.vehiculo),
         credito: normalizeCredito(body.credito),
         seguro: normalizeSeguro(body.seguro),
@@ -182,6 +193,7 @@ function normalizeFormatoA(body) {
 
 function normalizeFormatoB(body) {
     const clienteKeys = [
+        "tipo_persona",
         "customerType",
         "genero",
         "customerTitle",
@@ -258,7 +270,7 @@ function normalizeFormatoB(body) {
         ...(body.nivel_detalle !== undefined || body.nivelDetalle !== undefined
             ? { nivel_detalle: normalizeNivelDetalle(body.nivel_detalle ?? body.nivelDetalle) }
             : {}),
-        cliente: pick(body, clienteKeys),
+        cliente: normalizeCliente(pick(body, clienteKeys)),
         vehiculo: normalizeVehiculo(pick(body, vehiculoKeys)),
         credito: normalizeCredito(pick(body, creditoKeys)),
         seguro: normalizeSeguro(pick(body, seguroKeys)),
