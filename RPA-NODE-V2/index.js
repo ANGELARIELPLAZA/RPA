@@ -647,7 +647,12 @@ async function etapaVehiculo(popup, data) {
     await popup.waitForTimeout(1500);
 
     if (!empty(v.vehicleAccesoriesAmount)) {
-        await esperarYLlenar(popup, "#vehicleAccesoriesAmount", v.vehicleAccesoriesAmount);
+        const raw = normalizeString(v.vehicleAccesoriesAmount).replace(/,/g, "");
+        const asNumber = Number(raw);
+        const isZeroLike = Number.isFinite(asNumber) && asNumber === 0;
+        if (!isZeroLike) {
+            await esperarYLlenar(popup, "#vehicleAccesoriesAmount", v.vehicleAccesoriesAmount);
+        }
     }
     await popup.waitForTimeout(1500);
 
