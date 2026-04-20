@@ -767,6 +767,64 @@ async function etapaSeguro(popup, data) {
     ];
 }
 
+function isBadGatewayText(value) {
+    const text = String(value || "").toLowerCase();
+    return text.includes("502 bad gateway") || text.includes("bad gateway");
+}
+
+function createBadGatewayWatcher(page, getStage) {
+    let done = false;
+    let rejectFn;
+
+    const promise = new Promise((_, reject) => {
+        rejectFn = reject;
+    });
+
+    const fail = (message) => {
+        if (done) return;
+        done = true;
+        const stage = typeof getStage === "function" ? getStage() : "";
+        const url = page && typeof page.url === "function" ? page.url() : "";
+        rejectFn(new Error(`${message}${stage ? ` | etapa=${stage}` : ""}${url ? ` | URL: ${url}` : ""}`));
+    };
+
+    const onResponse = (resp) => {
+        try {
+            const status = resp.status();
+            if (status === 502) {
+                fail(`502 Bad Gateway detectado en respuesta: ${resp.url()}`);
+            }
+        } catch { }
+    };
+
+    const onDomContentLoaded = async () => {
+        try {
+            const title = await page.title().catch(() => "");
+            if (isBadGatewayText(title)) {
+                fail(`502 Bad Gateway detectado (title)`);
+                return;
+            }
+
+            const bodyText = await page.evaluate(() => document.body?.innerText || "").catch(() => "");
+            if (isBadGatewayText(bodyText)) {
+                fail(`502 Bad Gateway detectado (body)`);
+            }
+        } catch { }
+    };
+
+    page.on("response", onResponse);
+    page.on("domcontentloaded", onDomContentLoaded);
+
+    const dispose = () => {
+        if (done) return;
+        done = true;
+        page.off("response", onResponse);
+        page.off("domcontentloaded", onDomContentLoaded);
+    };
+
+    return { promise, dispose };
+}
+
 /* =========================
    FLUJO PRINCIPAL (PARAMETRIZABLE)
 ========================= */
@@ -781,13 +839,14 @@ async function runCetelemFlow(payload, hooks = {}) {
     const page = await context.newPage();
     let popup;
     let currentStage = "inicializando";
+    let badGatewayWatcher = createBadGatewayWatcher(page, () => currentStage);
 
     const stage = async (name, fn) => {
         currentStage = name;
         if (hooks.onStage) {
             await hooks.onStage({ name });
         }
-        return fn();
+        return Promise.race([Promise.resolve().then(fn), badGatewayWatcher.promise]);
     };
 
     try {
@@ -800,6 +859,10 @@ async function runCetelemFlow(payload, hooks = {}) {
         // Hacer hooks accesibles desde helpers (esperarYSeleccionar/esperarYLlenar/etc.)
         page.__rpaHooks = hooks;
         popup.__rpaHooks = hooks;
+
+        // Cambia el watcher al popup ya que es donde vive el cotizador.
+        badGatewayWatcher.dispose();
+        badGatewayWatcher = createBadGatewayWatcher(popup, () => currentStage);
 
         const nivelDetalle = normalizeString(data?.nivel_detalle ?? data?.nivelDetalle).toLowerCase();
         const isSeguros = nivelDetalle === "seguros";
@@ -839,6 +902,7 @@ async function runCetelemFlow(payload, hooks = {}) {
         }
         throw error;
     } finally {
+        badGatewayWatcher.dispose();
         if (popup && popup !== page) await popup.close().catch(() => { });
         await page.close().catch(() => { });
         await context.close().catch(() => { });
