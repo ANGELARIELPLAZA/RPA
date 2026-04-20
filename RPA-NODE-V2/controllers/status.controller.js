@@ -10,6 +10,51 @@ function normalizeNivelDetalleFromTask(task) {
 function getStatus(req, res) {
     const taskId = req.params.task_id;
     const task = taskStore.getTask(taskId);
+
+    const formato = String(req.query.formato ?? "").trim().toLowerCase();
+    const isDebug = formato === "debug";
+    const isJob = formato === "job";
+
+    const includePayloadRaw = req.query.include_payload ?? req.query.payload ?? req.query.includePayload;
+    const includePayload = includePayloadRaw === "1" || includePayloadRaw === "true" || includePayloadRaw === true;
+
+    // Modo polling compatible con waitForJobCompletion()
+    if (isJob) {
+        if (!task) {
+            return res.json({
+                status: "failed",
+                error_message: "task_id no encontrado",
+                response_data: null,
+            });
+        }
+
+        const tech = taskStore.toPublicStatus(task, { includePayload: false, includeScreenshotBase64: false });
+        const nivel_detalle = normalizeNivelDetalleFromTask(task) || "seguros";
+        const client = formatearSalidaCliente({ ...tech, nivel_detalle });
+
+        const s = String(task.status || "").toLowerCase();
+        if (s === "fallido") {
+            return res.json({
+                status: "failed",
+                error_message: client?.mensaje_det || tech?.detalle || "Error",
+                response_data: client,
+                screenshot_url: tech?.screenshot_url || null,
+            });
+        }
+
+        if (s === "completado") {
+            return res.json({
+                status: "completed",
+                response_data: client,
+            });
+        }
+
+        return res.json({
+            status: "processing",
+            response_data: client,
+        });
+    }
+
     if (!task) {
         return res.status(404).json({
             estatus_code: 0,
@@ -18,12 +63,6 @@ function getStatus(req, res) {
             data: null,
         });
     }
-
-    const formato = String(req.query.formato ?? "").trim().toLowerCase();
-    const isDebug = formato === "debug";
-
-    const includePayloadRaw = req.query.include_payload ?? req.query.payload ?? req.query.includePayload;
-    const includePayload = includePayloadRaw === "1" || includePayloadRaw === "true" || includePayloadRaw === true;
 
     const tech = taskStore.toPublicStatus(task, { includePayload });
 
