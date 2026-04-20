@@ -197,10 +197,8 @@ async function fillBirthDateMasked(page, selector, value) {
 
 
 
-async function esperarYSeleccionar(page, selector, value) {
+async function esperarYSeleccionar(page, selector, value, timeout = 30000) {
     const desired = normalizeString(value);
-
-    await page.waitForSelector(selector, { state: "visible", timeout: 15000 });
 
     await page.waitForFunction(
         ({ selector, value }) => {
@@ -209,10 +207,10 @@ async function esperarYSeleccionar(page, selector, value) {
             return Array.from(el.options).some(opt => opt.value === value);
         },
         { selector, value: desired },
-        { timeout: 30000 }
+        { timeout }
     );
 
-    await page.selectOption(selector, desired);
+    await page.selectOption(selector, desired, { timeout });
     await page.waitForTimeout(1000);
 }
 
@@ -422,7 +420,7 @@ async function etapaAbrirCotizador(popup) {
 async function etapaCliente(popup, data) {
     const c = data?.cliente || {};
 
-    await esperarYSeleccionar(popup, "#customerType", c.customerType);
+    await esperarYSeleccionar(popup, "#customerType", c.customerType, 60000);
     await esperarYSeleccionar(popup, "#genero", c.genero);
     await esperarYSeleccionar(popup, "#customerTitle", c.customerTitle);
 
