@@ -28,14 +28,20 @@ function isPortalDown(portalStatus) {
 }
 
 async function cotizarCetelemAsync(req, res) {
-    // 1) VALIDACIÓN PREVIA OBLIGATORIA: validar portal ANTES de task_id
+    const task_id = uuid();
+    const status_response = `${BASE_URL}/status/${task_id}`;
+
+    // 1) Validación previa del portal (pero ya con task_id para respuesta consistente)
     const portal = await pingPortal();
     if (isPortalDown(portal)) {
         logger.error("[portal] fuera de servicio", portal);
+        const screenshotBase64 = await takePortalScreenshotBase64(portal?.url);
         return res.status(503).json({
-            status: "fallido",
-            detalle: "portal de cetelem fuera de servicio",
-            fecha_ejecucion: formatDateTime(new Date()),
+            task_id,
+            status: "Fallido",
+            detail: "portal de cetelem fuera de servicio",
+            status_response,
+            screenshot: { base64: screenshotBase64 },
         });
     }
 
@@ -45,13 +51,14 @@ async function cotizarCetelemAsync(req, res) {
         normalizedPayload = normalizeCotizacionPayload(req.body);
     } catch (error) {
         return res.status(400).json({
-            status: "fallido",
-            detalle: error?.message || "payload inválido",
-            fecha_ejecucion: formatDateTime(new Date()),
+            task_id,
+            status: "Fallido",
+            detail: error?.message || "payload inválido",
+            status_response,
+            screenshot: { base64: null },
         });
     }
 
-    const task_id = uuid();
     const fecha_ejecucion = Date.now();
     const stages = buildFlowStages(normalizedPayload);
 
@@ -96,6 +103,7 @@ async function cotizarCetelemAsync(req, res) {
         task_id,
         status: "En progreso",
         fecha_ejecucion: formatDateTime(new Date(fecha_ejecucion)),
+        status_response,
     });
 
     // 4) Ejecución asíncrona (no bloquear response)
