@@ -117,6 +117,28 @@ async function executeTask(taskId, normalizedPayload, portalMeta) {
             });
             logTask(taskId, `etapa=${etapaNombre}`, { etapaNumero: `${currentStep}/${totalSteps}` }, { level: "debug" });
         },
+        onProgress: async ({ page, message }) => {
+            const msg = String(message || "").trim();
+            if (!msg) return;
+
+            const now = Date.now();
+            const task = taskStore.getTask(taskId);
+            const lastAt = task?.__last_progress_at || 0;
+            const lastMsg = task?.__last_progress_msg || "";
+
+            // throttle: evita spam si llega el mismo msg muy seguido
+            if (msg === lastMsg && now - lastAt < 500) return;
+
+            const url = page && typeof page.url === "function" ? page.url() : "";
+            const detalle = url ? `${msg} | URL: ${url}` : msg;
+
+            taskStore.patchTask(taskId, {
+                detalle,
+                __last_progress_at: now,
+                __last_progress_msg: msg,
+            });
+            trackingClient.updateExecution(taskId, { detalle });
+        },
         onErrorScreenshot: async ({ page }) => {
             const shot = await takeTaskScreenshot(page, { taskId, etapaNombre });
             if (shot?.url) {
@@ -168,7 +190,9 @@ async function executeTask(taskId, normalizedPayload, portalMeta) {
         logger.error(`[task ${String(taskId).slice(0, 8)}] error: ${error?.message || error}`);
 
         // intentar screenshot si el flow expone page en error (hooks), si no, solo marcar fallo
-        const detalle = buildTaskDetalle(error);
+        const errorDetalle = buildTaskDetalle(error);
+        const lastProgress = taskStore.getTask(taskId)?.detalle;
+        const detalle = lastProgress ? `${lastProgress}\nError: ${errorDetalle}` : errorDetalle;
         taskStore.failTask(taskId, {
             detalle,
             error: {

@@ -200,6 +200,11 @@ async function fillBirthDateMasked(page, selector, value) {
 async function esperarYSeleccionar(page, selector, value, timeout = 30000) {
     const desired = normalizeString(value);
 
+    const hooks = page?.__rpaHooks;
+    if (hooks?.onProgress) {
+        await hooks.onProgress({ page, message: `Esperando ${selector}` }).catch(() => { });
+    }
+
     await page.waitForFunction(
         ({ selector, value }) => {
             const el = document.querySelector(selector);
@@ -210,18 +215,35 @@ async function esperarYSeleccionar(page, selector, value, timeout = 30000) {
         { timeout }
     );
 
+    if (hooks?.onProgress) {
+        await hooks.onProgress({ page, message: `Seleccionando ${selector}=${desired}` }).catch(() => { });
+    }
     await page.selectOption(selector, desired, { timeout });
     await page.waitForTimeout(1000);
 }
 
 async function esperarYLlenar(page, selector, value) {
+    const hooks = page?.__rpaHooks;
+    if (hooks?.onProgress) {
+        await hooks.onProgress({ page, message: `Esperando ${selector}` }).catch(() => { });
+    }
     await page.waitForSelector(selector, { state: "visible", timeout: 15000 });
+    if (hooks?.onProgress) {
+        await hooks.onProgress({ page, message: `Llenando ${selector}` }).catch(() => { });
+    }
     await page.fill(selector, normalizeString(value));
     await page.waitForTimeout(1000);
 }
 
 async function esperarYLlenarUpper(page, selector, value) {
+    const hooks = page?.__rpaHooks;
+    if (hooks?.onProgress) {
+        await hooks.onProgress({ page, message: `Esperando ${selector}` }).catch(() => { });
+    }
     await page.waitForSelector(selector, { state: "visible", timeout: 15000 });
+    if (hooks?.onProgress) {
+        await hooks.onProgress({ page, message: `Llenando ${selector}` }).catch(() => { });
+    }
     await page.fill(selector, normalizeUppercase(value));
     await page.waitForTimeout(1000);
 }
@@ -618,6 +640,10 @@ async function runCetelemFlow(payload, hooks = {}) {
             await etapaAbrirCotizador(pop);
             return pop;
         });
+
+        // Hacer hooks accesibles desde helpers (esperarYSeleccionar/esperarYLlenar/etc.)
+        page.__rpaHooks = hooks;
+        popup.__rpaHooks = hooks;
 
         if (data?.cliente && Object.keys(data.cliente).length) {
             await stage("cliente", async () => etapaCliente(popup, data));
