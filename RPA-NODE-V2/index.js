@@ -253,6 +253,13 @@ async function esperarYSeleccionar(page, selector, value, timeout = 30000) {
     const desired = normalizeString(value);
     const hooks = page?.__rpaHooks;
 
+    if (empty(desired)) {
+        if (hooks?.onProgress) {
+            await hooks.onProgress({ page, message: `Falta valor para seleccionar ${selector}` }).catch(() => { });
+        }
+        throw new Error(`Falta valor para seleccionar ${selector}`);
+    }
+
     const locator = await getBestSelectLocator(page, selector);
     await locator.waitFor({ state: "attached", timeout });
 
@@ -596,6 +603,19 @@ async function etapaCliente(popup, data) {
 ========================= */
 async function etapaVehiculo(popup, data) {
     const v = data?.vehiculo || {};
+    const nivelDetalle = normalizeString(data?.nivel_detalle ?? data?.nivelDetalle).toLowerCase();
+
+    // Para pruebas: si solo se requiere llegar a seguros, permitir un default mínimo.
+    if (nivelDetalle === "seguros" && empty(v.vehicleType)) {
+        v.vehicleType = "1";
+    }
+
+    if (empty(v.vehicleType)) throw new Error("Falta campo requerido: vehicleType");
+    if (empty(v.insuranceVehicleUse)) throw new Error("Falta campo requerido: insuranceVehicleUse");
+    if (empty(v.vehicleBrand)) throw new Error("Falta campo requerido: vehicleBrand");
+    if (empty(v.vehicleAnio)) throw new Error("Falta campo requerido: vehicleAnio");
+    if (empty(v.vehicleModel)) throw new Error("Falta campo requerido: vehicleModel");
+    if (empty(v.vehicleVersion)) throw new Error("Falta campo requerido: vehicleVersion");
 
     await esperarYSeleccionar(popup, "#vehicleType", v.vehicleType);
     if (v.seminuevoCertificado === true) {
