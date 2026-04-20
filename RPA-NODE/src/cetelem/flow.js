@@ -6,6 +6,29 @@ function empty(value) {
     return value === undefined || value === null || String(value).trim() === "";
 }
 
+async function esperarOverlayCarga(page, { selector = "#contenedor_carga", timeout = 90000 } = {}) {
+    try {
+        await page.locator(selector).waitFor({ state: "hidden", timeout });
+    } catch (e) {
+        const msg = String(e?.message || e);
+        if (msg.includes("Execution context was destroyed") || msg.includes("Target closed") || msg.includes("Page closed")) {
+            return;
+        }
+        throw e;
+    }
+}
+
+async function clickConOverlay(page, selector, { timeout = 90000 } = {}) {
+    await esperarOverlayCarga(page, { timeout: Math.min(timeout, 30000) });
+
+    const locator = page.locator(selector);
+    await locator.waitFor({ state: "visible", timeout });
+
+    await locator.click({ timeout });
+
+    await esperarOverlayCarga(page, { timeout });
+}
+
 function normalizeString(value) {
     return String(value).trim();
 }
@@ -182,12 +205,12 @@ async function runCetelemFlow(payload) {
         });
 
         await page.fill('input[name="userName"]', USUARIO);
-        await page.locator("#btnEntrar").click();
+        await clickConOverlay(page, "#btnEntrar", { timeout: 90000 });
 
         await page.fill('input[name="userPassword"]', PASSWORD);
 
-        const popupPromise = page.waitForEvent("popup", { timeout: 15000 });
-        await page.locator("#btnEntrar").click();
+        const popupPromise = page.waitForEvent("popup", { timeout: 60000 });
+        await clickConOverlay(page, "#btnEntrar", { timeout: 90000 });
 
         popup = await popupPromise;
         await popup.waitForLoadState("domcontentloaded", { timeout: 30000 });

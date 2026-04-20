@@ -1,0 +1,14 @@
+{
+  "name": "rpa-tracking-service",
+  "version": "1.0.0",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js"
+  },
+  "dependencies": {
+    "dotenv": "^17.4.2",
+    "express": "^4.21.2",
+    "mongoose": "^8.16.3"
+  }
+}
+

@@ -8,21 +8,20 @@ const LEVELS = {
 
 const fs = require("fs");
 const path = require("path");
-const { LOGS_DIR } = require("../config");
 
 const configuredLevel = String(process.env.LOG_LEVEL || "info").toLowerCase();
 const currentLevel = LEVELS[configuredLevel] ?? LEVELS.info;
 
 const logToFile = String(process.env.LOG_TO_FILE || "false").toLowerCase() === "true";
+const logDir = process.env.LOG_DIR || "./logs";
 let fileStream = null;
 
 function getFileStream() {
     if (!logToFile) return null;
     if (fileStream) return fileStream;
-
     try {
-        fs.mkdirSync(LOGS_DIR, { recursive: true });
-        fileStream = fs.createWriteStream(path.join(LOGS_DIR, "app.log"), { flags: "a" });
+        fs.mkdirSync(logDir, { recursive: true });
+        fileStream = fs.createWriteStream(path.join(logDir, "app.log"), { flags: "a" });
         return fileStream;
     } catch {
         return null;
@@ -34,10 +33,7 @@ function shouldLog(level) {
 }
 
 function write(level, message, meta) {
-    if (!shouldLog(level)) {
-        return;
-    }
-
+    if (!shouldLog(level)) return;
     const suffix = meta === undefined ? "" : ` ${JSON.stringify(meta)}`;
     const line = `${message}${suffix}`;
 
@@ -46,25 +42,16 @@ function write(level, message, meta) {
         stream.write(`${new Date().toISOString()} ${level.toUpperCase()} ${line}\n`);
     }
 
-    if (level === "error") {
-        console.error(line);
-        return;
-    }
-
-    if (level === "warn") {
-        console.warn(line);
-        return;
-    }
-
-    console.log(line);
+    if (level === "error") return console.error(line);
+    if (level === "warn") return console.warn(line);
+    return console.log(line);
 }
 
 module.exports = {
-    debug: (message, meta) => write("debug", message, meta),
-    error: (message, meta) => write("error", message, meta),
-    info: (message, meta) => write("info", message, meta),
-    shouldLog,
-    warn: (message, meta) => write("warn", message, meta),
+    debug: (m, meta) => write("debug", m, meta),
+    info: (m, meta) => write("info", m, meta),
+    warn: (m, meta) => write("warn", m, meta),
+    error: (m, meta) => write("error", m, meta),
 };
 
 process.on("exit", () => {

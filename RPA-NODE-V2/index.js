@@ -1,8 +1,8 @@
-const path = require("path");
 const BrowserManager = require("./core/browser-manager");
-const { LOGIN_URL, SCREENSHOTS_DIR, USUARIO, PASSWORD } = require("./config");
+const { CETELEM_URL, USUARIO, PASSWORD, MAX_REINTENTOS } = require("./config");
+const logger = require("./core/logger");
 
-const DATA = {
+const DEFAULT_DATA = {
     cliente: {
         customerType: "1",
         genero: "1",
@@ -50,6 +50,29 @@ const DATA = {
 
 function empty(value) {
     return value === undefined || value === null || String(value).trim() === "";
+}
+
+async function esperarOverlayCarga(page, { selector = "#contenedor_carga", timeout = 90000 } = {}) {
+    try {
+        await page.locator(selector).waitFor({ state: "hidden", timeout });
+    } catch (e) {
+        const msg = String(e?.message || e);
+        if (msg.includes("Execution context was destroyed") || msg.includes("Target closed") || msg.includes("Page closed")) {
+            return;
+        }
+        throw e;
+    }
+}
+
+async function clickConOverlay(page, selector, { timeout = 90000 } = {}) {
+    await esperarOverlayCarga(page, { timeout: Math.min(timeout, 30000) });
+
+    const locator = page.locator(selector);
+    await locator.waitFor({ state: "visible", timeout });
+
+    await locator.click({ timeout });
+
+    await esperarOverlayCarga(page, { timeout });
 }
 
 async function esperarSelectEstableYSeleccionar(page, selector, value, options = {}) {
@@ -294,7 +317,7 @@ async function esperarTablaSeguroConRecarga(page, selectorRecarga, valorCorrecto
         return tabla;
     }
 
-    console.log(`Tabla de seguro no cargó. Fuerzo recarga desde ${selectorRecarga}...`);
+    logger.warn(`[seguro] Tabla de seguro no cargó. Fuerzo recarga desde ${selectorRecarga}...`);
 
     tabla = await recargarTablaSeguroDesdeSelector(
         page,
@@ -316,27 +339,68 @@ function tablaSeguroValida(opciones) {
     const montosValidos = opciones.filter(x => x.monto && x.monto !== "0.00");
     return montosValidos.length > 0;
 }
+
+function waitForPopupOrNewPage(openerPage, timeoutMs = 15000) {
+    const context = openerPage.context();
+
+    return new Promise((resolve) => {
+        let done = false;
+        let timer = null;
+
+        const cleanup = () => {
+            try { openerPage.off("popup", onPopup); } catch { }
+            try { context.off("page", onPage); } catch { }
+            if (timer) clearTimeout(timer);
+        };
+
+        const finish = (p) => {
+            if (done) return;
+            done = true;
+            cleanup();
+            resolve(p || null);
+        };
+
+        const onPopup = (p) => finish(p);
+        const onPage = (p) => {
+            try {
+                if (p.opener && p.opener() === openerPage) finish(p);
+            } catch { }
+        };
+
+        openerPage.on("popup", onPopup);
+        context.on("page", onPage);
+        timer = setTimeout(() => finish(null), timeoutMs);
+    });
+}
 /* =========================
    ETAPA 1 - LOGIN
 ========================= */
 async function etapaLogin(page) {
-    await page.goto(LOGIN_URL, {
+    await page.goto(CETELEM_URL, {
         waitUntil: "domcontentloaded",
         timeout: 30000,
     });
 
     await page.fill('input[name="userName"]', USUARIO);
-    await page.locator("#btnEntrar").click();
+    await clickConOverlay(page, "#btnEntrar", { timeout: 90000 });
 
     await page.fill('input[name="userPassword"]', PASSWORD);
 
-    const popupPromise = page.waitForEvent("popup", { timeout: 15000 });
-    await page.locator("#btnEntrar").click();
+    // El portal a veces abre el cotizador en un popup (window.open) y otras veces navega en la misma pestaña.
+    const targetPromise = waitForPopupOrNewPage(page, 60000);
 
-    const popup = await popupPromise;
-    await popup.waitForLoadState("domcontentloaded", { timeout: 30000 });
+    await clickConOverlay(page, "#btnEntrar", { timeout: 90000 });
 
-    return popup;
+    const target = await targetPromise;
+
+    if (target) {
+        await target.waitForLoadState("domcontentloaded", { timeout: 30000 });
+        return target;
+    }
+
+    logger.warn(`[login] No se abrió popup; continuando en la misma pestaña (url=${page.url()})`);
+    await page.waitForLoadState("domcontentloaded", { timeout: 30000 }).catch(() => { });
+    return page;
 }
 
 /* =========================
@@ -355,8 +419,8 @@ async function etapaAbrirCotizador(popup) {
 /* =========================
    ETAPA 3 - CLIENTE
 ========================= */
-async function etapaCliente(popup) {
-    const c = DATA.cliente;
+async function etapaCliente(popup, data) {
+    const c = data?.cliente || {};
 
     await esperarYSeleccionar(popup, "#customerType", c.customerType);
     await esperarYSeleccionar(popup, "#genero", c.genero);
@@ -381,8 +445,8 @@ async function etapaCliente(popup) {
 /* =========================
    ETAPA 4 - VEHICULO
 ========================= */
-async function etapaVehiculo(popup) {
-    const v = DATA.vehiculo;
+async function etapaVehiculo(popup, data) {
+    const v = data?.vehiculo || {};
 
     await esperarYSeleccionar(popup, "#vehicleType", v.vehicleType);
     if (v.seminuevoCertificado === true) {
@@ -453,7 +517,7 @@ async function etapaRecuperarPrecioVehiculo(popup) {
 
     const price = await popup.locator("#vehiclePriceTax").inputValue().catch(() => "");
 
-    console.log("vehiclePriceTax recuperado:", price);
+    logger.info(`[vehiculo] vehiclePriceTax recuperado: ${price}`);
 
     return price;
 }
@@ -461,8 +525,8 @@ async function etapaRecuperarPrecioVehiculo(popup) {
 /* =========================
    ETAPA 6 - CREDITO
 ========================= */
-async function etapaCredito(popup) {
-    const c = DATA.credito;
+async function etapaCredito(popup, data) {
+    const c = data?.credito || {};
 
     if (!empty(c.creditDepositAmount)) {
         await esperarYLlenar(popup, "#creditDepositAmount", c.creditDepositAmount);
@@ -482,8 +546,8 @@ async function etapaCredito(popup) {
 /* =========================
    ETAPA 7 - SEGURO
 ========================= */
-async function etapaSeguro(popup) {
-    const s = DATA.seguro;
+async function etapaSeguro(popup, data) {
+    const s = data?.seguro || {};
 
     await esperarYLlenar(popup, "#insuranceCP", s.insuranceCP);
     await popup.mouse.click(10, 10);
@@ -528,27 +592,11 @@ async function etapaSeguro(popup) {
 }
 
 /* =========================
-   ETAPA 8 - SCREENSHOT
+   FLUJO PRINCIPAL (PARAMETRIZABLE)
 ========================= */
-async function etapaScreenshot(popup) {
-    const screenshotPath = path.join(
-        SCREENSHOTS_DIR,
-        `playwright_${Date.now()}.png`
-    );
+async function runCetelemFlow(payload, hooks = {}) {
+    const data = payload || DEFAULT_DATA;
 
-    await popup.screenshot({
-        path: screenshotPath,
-        type: "png",
-        fullPage: true,
-    });
-
-    return screenshotPath;
-}
-
-/* =========================
-   FLUJO PRINCIPAL
-========================= */
-async function runCetelemFlowSecuencialHardcode() {
     const browser = await BrowserManager.getBrowser();
     const context = await browser.newContext({
         viewport: { width: 1366, height: 900 },
@@ -556,57 +604,95 @@ async function runCetelemFlowSecuencialHardcode() {
 
     const page = await context.newPage();
     let popup;
+    let currentStage = "inicializando";
+
+    const stage = async (name, fn) => {
+        currentStage = name;
+        if (hooks.onStage) {
+            await hooks.onStage({ name });
+        }
+        return fn();
+    };
 
     try {
-        console.log("PASO 1: LOGIN");
-        popup = await etapaLogin(page);
+        popup = await stage("login", async () => {
+            const pop = await etapaLogin(page);
+            await etapaAbrirCotizador(pop);
+            return pop;
+        });
 
-        console.log("PASO 2: ABRIR COTIZADOR");
-        await etapaAbrirCotizador(popup);
+        if (data?.cliente && Object.keys(data.cliente).length) {
+            await stage("cliente", async () => etapaCliente(popup, data));
+        }
 
-        console.log("PASO 3: CLIENTE");
-        await etapaCliente(popup);
+        if (data?.vehiculo && Object.keys(data.vehiculo).length) {
+            await stage("vehiculo", async () => {
+                await etapaVehiculo(popup, data);
+                await etapaRecuperarPrecioVehiculo(popup);
+            });
+        }
 
-        console.log("PASO 4: VEHICULO");
-        await etapaVehiculo(popup);
+        if (data?.credito && Object.keys(data.credito).length) {
+            await stage("credito", async () => etapaCredito(popup, data));
+        }
 
-        console.log("PASO 5: RECUPERAR PRECIO");
-        const vehiclePriceTax = await etapaRecuperarPrecioVehiculo(popup);
+        let seguroResult = null;
+        if (data?.seguro && Object.keys(data.seguro).length) {
+            seguroResult = await stage("seguro", async () => etapaSeguro(popup, data));
+        }
 
-        console.log("PASO 6: CREDITO");
-        await etapaCredito(popup);
-
-        console.log("PASO 7: SEGURO");
-        const seguroResult = await etapaSeguro(popup);
-
-        console.log("PASO 8: SCREENSHOT");
-        const screenshotPath = await etapaScreenshot(popup);
+        await stage("finalizando", async () => { });
 
         return {
             ok: true,
-            //screenshotPath,
-            //vehiclePriceTax,
             result: seguroResult,
-            //data: DATA,
         };
+    } catch (error) {
+        if (hooks.onErrorScreenshot) {
+            try {
+                await hooks.onErrorScreenshot({ page: popup || page, stage: currentStage });
+            } catch { }
+        }
+        throw error;
     } finally {
-        if (popup) await popup.close().catch(() => { });
+        if (popup && popup !== page) await popup.close().catch(() => { });
         await page.close().catch(() => { });
         await context.close().catch(() => { });
     }
 }
 
-async function runCetelemFlowWithRetries() {
-    return runCetelemFlowSecuencialHardcode();
+async function runCetelemFlowWithRetries(payload, hooks = {}) {
+    const max = Number.isInteger(MAX_REINTENTOS) && MAX_REINTENTOS > 0 ? MAX_REINTENTOS : 1;
+
+    let lastError = null;
+    for (let attempt = 1; attempt <= max; attempt += 1) {
+        try {
+            if (attempt > 1) {
+                logger.warn(`[flow] reintento ${attempt}/${max}`);
+            }
+            return await runCetelemFlow(payload, hooks);
+        } catch (error) {
+            lastError = error;
+            logger.warn(`[flow] fallo intento ${attempt}/${max}: ${error?.message || error}`);
+            if (attempt < max) {
+                await BrowserManager.restart().catch(() => { });
+                await new Promise((r) => setTimeout(r, 500 * attempt));
+                continue;
+            }
+        }
+    }
+
+    throw lastError;
 }
 
 module.exports = {
-    runCetelemFlowSecuencialHardcode,
+    DEFAULT_DATA,
+    runCetelemFlow,
     runCetelemFlowWithRetries,
 };
 
 if (require.main === module) {
-    runCetelemFlowSecuencialHardcode()
+    runCetelemFlow(DEFAULT_DATA)
         .then((result) => {
             console.log("RESULTADO:", result);
             process.exit(0);

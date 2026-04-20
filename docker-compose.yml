@@ -1,0 +1,121 @@
+services:
+  mongo:
+    image: mongo:7
+    container_name: mongo
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    restart: unless-stopped
+
+  rpa-tracking-service:
+    build: ./rpa-tracking-service
+    container_name: rpa-tracking-service
+    depends_on:
+      - mongo
+    environment:
+      - PORT=3100
+      - NODE_ENV=production
+      - MONGO_URI=mongodb://mongo:27017/rpa_tracking
+      - SERVICE_NAME=rpa-tracking-service
+      - REQUEST_TIMEOUT_MS=3000
+      - LOG_TO_FILE=true
+      - LOG_DIR=/app/logs
+    ports:
+      - "3100:3100"
+    volumes:
+      - ./rpa-tracking-service/logs:/app/logs
+    restart: unless-stopped
+
+  rpa-node-v2:
+    build: ./RPA-NODE-V2
+    container_name: rpa-node-v2
+    depends_on:
+      - rpa-tracking-service
+    environment:
+      - PORT=3000
+      - HOST=0.0.0.0
+      - NODE_ENV=production
+      - TRACKING_ENABLED=true
+      - TRACKING_SERVICE_URL=http://rpa-tracking-service:3100
+      - LOG_TO_FILE=true
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./RPA-NODE-V2/screenshots:/app/screenshots
+      - ./RPA-NODE-V2/logs:/app/logs
+      - ./RPA-NODE-V2/videos:/app/videos
+    restart: unless-stopped
+
+  loki:
+    image: grafana/loki:2.9.8
+    container_name: loki
+    command: -config.file=/etc/loki/config.yml
+    ports:
+      - "3101:3100"
+    volumes:
+      - ./observability/loki-config.yml:/etc/loki/config.yml:ro
+      - loki_data:/loki
+    restart: unless-stopped
+
+  promtail:
+    image: grafana/promtail:2.9.8
+    container_name: promtail
+    command: -config.file=/etc/promtail/config.yml
+    depends_on:
+      - loki
+    volumes:
+      - ./observability/promtail-config.yml:/etc/promtail/config.yml:ro
+      - ./RPA-NODE-V2/logs:/var/log/rpa-node-v2:ro
+      - ./rpa-tracking-service/logs:/var/log/rpa-tracking-service:ro
+      - promtail_positions:/tmp
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:11.2.0
+    container_name: grafana
+    depends_on:
+      - loki
+      - mongo
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      # MongoDB datasource es un plugin comunitario; útil para dashboards simples sobre executions/events.
+      - GF_INSTALL_PLUGINS=grafana-mongodb-datasource
+    ports:
+      - "3001:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+    restart: unless-stopped
+
+  mongo-express:
+    image: mongo-express:1.0.2
+    container_name: mongo-express
+    profiles: ["dev"]
+    depends_on:
+      - mongo
+    environment:
+      - ME_CONFIG_MONGODB_URL=mongodb://mongo:27017
+      - ME_CONFIG_BASICAUTH_USERNAME=admin
+      - ME_CONFIG_BASICAUTH_PASSWORD=admin
+    ports:
+      - "8081:8081"
+    restart: unless-stopped
+
+  metabase:
+    image: metabase/metabase:v0.50.21
+    container_name: metabase
+    profiles: ["analysis"]
+    depends_on:
+      - mongo
+    ports:
+      - "3002:3000"
+    restart: unless-stopped
+
+volumes:
+  mongo_data:
+  grafana_data:
+  loki_data:
+  promtail_positions:
+
