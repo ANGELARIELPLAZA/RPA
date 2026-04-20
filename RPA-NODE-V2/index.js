@@ -702,22 +702,27 @@ async function etapaVehiculo(popup, data) {
         );
     }
 
-    if (!empty(v.gapInsurance)) {
+    const gapInsuranceValue = !empty(v.gapInsurance) ? normalizeUppercase(v.gapInsurance) : "";
+
+    if (gapInsuranceValue) {
         await esperarYRadio(
             popup,
-            `input[type="radio"][name="gapInsurance"][value="${normalizeUppercase(v.gapInsurance)}"]`
+            `input[type="radio"][name="gapInsurance"][value="${gapInsuranceValue}"]`
         );
     }
 
-    if (!empty(v.gapInsurancePlan)) {
-        await esperarYSeleccionar(popup, "#gapInsurancePlan", v.gapInsurancePlan);
-    }
+    // Si no hay GAP (N), no se busca plan/tipo aunque vengan en payload.
+    if (gapInsuranceValue !== "N") {
+        if (!empty(v.gapInsurancePlan)) {
+            await esperarYSeleccionar(popup, "#gapInsurancePlan", v.gapInsurancePlan);
+        }
 
-    if (!empty(v.gapInsuranceType)) {
-        await esperarYRadio(
-            popup,
-            `input[type="radio"][name="gapInsuranceType"][value="${normalizeUppercase(v.gapInsuranceType)}"]`
-        );
+        if (!empty(v.gapInsuranceType)) {
+            await esperarYRadio(
+                popup,
+                `input[type="radio"][name="gapInsuranceType"][value="${normalizeUppercase(v.gapInsuranceType)}"]`
+            );
+        }
     }
 }
 
