@@ -197,29 +197,150 @@ async function fillBirthDateMasked(page, selector, value) {
 
 
 
-async function esperarYSeleccionar(page, selector, value, timeout = 30000) {
-    const desired = normalizeString(value);
+async function getBestSelectLocator(page, selector) {
+    const visible = page.locator(`${selector}:visible`).first();
+    if (await visible.count().catch(() => 0)) return visible;
+    return page.locator(selector).first();
+}
 
-    const hooks = page?.__rpaHooks;
-    if (hooks?.onProgress) {
-        await hooks.onProgress({ page, message: `Esperando ${selector}` }).catch(() => { });
+async function snapshotSelect(locator) {
+    return locator.evaluate((el) => {
+        const select = el;
+        const options = Array.from(select.options || []).map((o) => ({
+            value: String(o.value ?? ""),
+            label: String(o.label ?? o.textContent ?? "").trim(),
+            selected: Boolean(o.selected),
+        }));
+        const selected = options.find((o) => o.selected) || null;
+        return {
+            disabled: Boolean(select.disabled),
+            optionsCount: options.length,
+            value: String(select.value ?? ""),
+            selectedLabel: selected?.label || "",
+            options,
+        };
+    }).catch(() => ({
+        disabled: null,
+        optionsCount: 0,
+        value: "",
+        selectedLabel: "",
+        options: [],
+    }));
+}
+
+function findOptionMatch(selectSnapshot, desiredRaw) {
+    const desired = normalizeString(desiredRaw);
+    const desiredLower = desired.toLowerCase();
+
+    const byValue = selectSnapshot.options.find((o) => String(o.value) === desired);
+    if (byValue) return { kind: "value", value: desired };
+
+    const byLabel = selectSnapshot.options.find((o) => String(o.label || "").toLowerCase() === desiredLower);
+    if (byLabel) return { kind: "label", value: desired };
+
+    // ya seleccionado (por value o label)
+    if (
+        String(selectSnapshot.value) === desired
+        || String(selectSnapshot.selectedLabel || "").toLowerCase() === desiredLower
+    ) {
+        return { kind: "already", value: desired };
     }
 
+    return null;
+}
+
+async function esperarYSeleccionar(page, selector, value, timeout = 30000) {
+    const desired = normalizeString(value);
+    const hooks = page?.__rpaHooks;
+
+    const locator = await getBestSelectLocator(page, selector);
+    await locator.waitFor({ state: "attached", timeout });
+
+    if (hooks?.onProgress) {
+        await hooks.onProgress({ page, message: `Esperando ${selector} (deseado=${desired})` }).catch(() => { });
+    }
+
+    // Espera a que el select tenga opciones cargadas (sin esperar el "deseado" indefinidamente)
     await page.waitForFunction(
-        ({ selector, value }) => {
-            const el = document.querySelector(selector);
-            if (!el) return false;
-            return Array.from(el.options).some(opt => opt.value === value);
+        (sel) => {
+            const nodes = Array.from(document.querySelectorAll(sel));
+            const select = nodes.find((n) => n && n.tagName === "SELECT" && !n.disabled);
+            if (!select) return false;
+            return (select.options?.length || 0) > 0;
         },
-        { selector, value: desired },
+        selector,
         { timeout }
     );
+
+    const snap = await snapshotSelect(locator);
+    const match = findOptionMatch(snap, desired);
+
+    if (!match) {
+        const optionsPreview = snap.options
+            .slice(0, 20)
+            .map((o) => `${o.value}:${o.label}`)
+            .join(", ");
+        throw new Error(
+            `Opción no encontrada para ${selector} (deseado="${desired}", actual="${snap.value}" label="${snap.selectedLabel}", opciones=${snap.optionsCount}): ${optionsPreview}`
+        );
+    }
+
+    if (match.kind === "already") {
+        if (hooks?.onProgress) {
+            await hooks.onProgress({ page, message: `Ya seleccionado ${selector}=${desired}` }).catch(() => { });
+        }
+        await page.waitForTimeout(250);
+        return;
+    }
 
     if (hooks?.onProgress) {
         await hooks.onProgress({ page, message: `Seleccionando ${selector}=${desired}` }).catch(() => { });
     }
-    await page.selectOption(selector, desired, { timeout });
+
+    if (match.kind === "label") {
+        await locator.selectOption({ label: desired }, { timeout });
+    } else {
+        await locator.selectOption(desired, { timeout });
+    }
+
     await page.waitForTimeout(1000);
+}
+
+async function esperarOpcionesORecargar(page, selector, { timeout = 8000, maxReloads = 2 } = {}) {
+    const hooks = page?.__rpaHooks;
+    for (let attempt = 1; attempt <= maxReloads + 1; attempt += 1) {
+        if (hooks?.onProgress) {
+            await hooks.onProgress({ page, message: `Esperando opciones ${selector} (intento ${attempt}/${maxReloads + 1})` }).catch(() => { });
+        }
+
+        const ok = await page.waitForFunction(
+            (sel) => {
+                const nodes = Array.from(document.querySelectorAll(sel));
+                const select = nodes.find((n) => n && n.tagName === "SELECT" && !n.disabled);
+                if (!select) return false;
+                const count = select.options?.length || 0;
+                // "0" o "1" suele ser placeholder, esperamos 2+
+                return count > 1;
+            },
+            selector,
+            { timeout }
+        ).then(() => true).catch(() => false);
+
+        if (ok) return true;
+
+        if (attempt <= maxReloads) {
+            if (hooks?.onProgress) {
+                await hooks.onProgress({ page, message: `Recargando página: opciones vacías en ${selector}` }).catch(() => { });
+            }
+            await page.reload({ waitUntil: "domcontentloaded", timeout: 60000 }).catch(() => { });
+            await page.waitForTimeout(1500);
+            continue;
+        }
+
+        return false;
+    }
+
+    return false;
 }
 
 async function esperarYLlenar(page, selector, value) {
@@ -442,6 +563,10 @@ async function etapaAbrirCotizador(popup) {
 async function etapaCliente(popup, data) {
     const c = data?.cliente || {};
 
+    const opcionesOk = await esperarOpcionesORecargar(popup, "#customerType", { timeout: 8000, maxReloads: 2 });
+    if (!opcionesOk) {
+        throw new Error("No cargaron opciones para #customerType después de recargar la página");
+    }
     await esperarYSeleccionar(popup, "#customerType", c.customerType, 60000);
     await esperarYSeleccionar(popup, "#genero", c.genero);
     await esperarYSeleccionar(popup, "#customerTitle", c.customerTitle);
