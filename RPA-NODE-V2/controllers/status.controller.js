@@ -33,7 +33,10 @@ function getStatus(req, res) {
         return res.json({
             status: "failed",
             error_message: "task_id no encontrado",
-            response_data: null,
+            estatus_code: 0,
+            nivel_detalle: "seguros",
+            mensaje_det: "task_id no encontrado",
+            data: null,
         });
     }
 
@@ -46,7 +49,7 @@ function getStatus(req, res) {
         return res.json({
             status: "failed",
             error_message: client?.mensaje_det || tech?.detalle || "Error",
-            response_data: client,
+            ...client,
             screenshot_url: tech?.screenshot_url || null,
         });
     }
@@ -54,13 +57,13 @@ function getStatus(req, res) {
     if (s === "completado") {
         return res.json({
             status: "completed",
-            response_data: client,
+            ...client,
         });
     }
 
     return res.json({
         status: "processing",
-        response_data: client,
+        ...client,
     });
 }
 

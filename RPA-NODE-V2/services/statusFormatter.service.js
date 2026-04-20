@@ -32,10 +32,18 @@ function formatearSalidaCliente(data) {
 
     if (status === "completado") {
         const primas = Array.isArray(data?.primas_seguros) ? data.primas_seguros : [];
+        const primas_formateadas = primas.map((p) => ({
+            aseguradora: String(p?.aseguradora ?? p?.nombre ?? "").trim(),
+            monto: formatPrima(p?.monto ?? p?.prima),
+            anualidad_requerida: p?.anualidad_requerida === true,
+            rango_anualidad: p?.rango_anualidad || { minimo: null, maximo: null },
+        }));
+
         return {
             estatus_code: 1,
             nivel_detalle: nivel_detalle || "seguros",
             mensaje_det: "Primas de seguros consultadas exitosamente",
+            primas_seguros: primas_formateadas,
             data: {
                 aseguradoras: primas.map((p) => ({
                     nombre: String(p?.aseguradora ?? "").trim(),
