@@ -16,6 +16,29 @@ function normalizeCotizacion(value) {
             String(value).trim() === "";
     }
 
+    function isZeroLike(value) {
+        if (value === undefined || value === null) return false;
+        const raw = String(value).trim();
+        if (raw === "") return false;
+        const numeric = Number(raw.replace(/,/g, ""));
+        return Number.isFinite(numeric) && numeric === 0;
+    }
+
+    // Regla: si la anualidad es 0, ignorar campos relacionados (mes/monto/primer pago).
+    // Mantener `importe_anualidad` para trazabilidad, pero no enviar/usar mes/monto.
+    if (!empty(cotizacion.importe_anualidad) && isZeroLike(cotizacion.importe_anualidad)) {
+        for (const key of [
+            "mes_anualidad",
+            "annuityMonth",
+            "anualidad_cliente",
+            "annuityAmount",
+            "mes_primer_pago",
+            "mesPrimerPago",
+        ]) {
+            if (key in cotizacion) delete cotizacion[key];
+        }
+    }
+
     if (empty(cotizacion.annuityMonth) && !empty(cotizacion.mes_anualidad)) {
         cotizacion.annuityMonth = cotizacion.mes_anualidad;
     }
@@ -35,6 +58,15 @@ function normalizeCotizacion(value) {
 
 function normalizeCliente(value) {
     const cliente = isObject(value) ? { ...value } : {};
+
+    function normalizeYesNo01(input) {
+        if (input === undefined || input === null) return input;
+        const raw = String(input).trim().toLowerCase();
+        if (raw === "") return "";
+        if (["1", "true", "si", "sí", "s", "y", "yes"].includes(raw)) return "1";
+        if (["0", "false", "no", "n"].includes(raw)) return "0";
+        return String(input).trim();
+    }
 
     // Alias comunes: nombre / apellidos (payload externo)
     if (cliente.customerName === undefined) {
@@ -87,6 +119,21 @@ function normalizeCliente(value) {
             cliente.numUnidades;
     }
 
+    // Alias: cliente actual (cetelem) -> customerFirstCredit (1=primer crédito, 0=no)
+    // Nota: en el portal se usa como select/radio en algunas variantes; aquí solo normalizamos valor.
+    if (cliente.customerFirstCredit === undefined && cliente.cliente_cetelem_actual !== undefined) {
+        const normalized = normalizeYesNo01(cliente.cliente_cetelem_actual);
+        if (normalized === "1") {
+            // "SI" => ya es cliente => no es primer crédito
+            cliente.customerFirstCredit = "0";
+        } else if (normalized === "0") {
+            // "NO" => no es cliente => primer crédito
+            cliente.customerFirstCredit = "1";
+        } else {
+            cliente.customerFirstCredit = normalized;
+        }
+    }
+
     // Alias: tipo_persona -> customerType
     if (cliente.customerType === undefined && cliente.tipo_persona !== undefined) {
         cliente.customerType = cliente.tipo_persona;
@@ -108,6 +155,11 @@ function normalizeCliente(value) {
         "customerBirthDate",
         "customerRfc",
         "customerNumUnidades",
+        "cliente_cetelem_actual",
+        "cliente_kia",
+        "cliente_fidelity",
+        "tipo_cliente_fidelity",
+        "customerFirstCredit",
     ]) {
         if (cliente[key] !== undefined && cliente[key] !== null) {
             cliente[key] = String(cliente[key]).trim();
@@ -279,6 +331,36 @@ function pick(obj, keys) {
 }
 
 function normalizeFormatoA(body) {
+    const clienteKeys = [
+        "tipo_persona",
+        "customerType",
+        "genero",
+        "titulo",
+        "customerTitle",
+        "nombre",
+        "apellido_paterno",
+        "apellido_materno",
+        "fecha_nacimiento",
+        "rfc",
+        "numero_unidades_solicitar",
+        "cliente_cetelem_actual",
+        "cliente_kia",
+        "cliente_fidelity",
+        "tipo_cliente_fidelity",
+        "customerName",
+        "customerAPaterno",
+        "customerAMaterno",
+        "customerBirthDate",
+        "customerRfc",
+        "customerNumUnidades",
+        "customerFirstCredit",
+    ];
+
+    const mergedCliente = {
+        ...pick(body, clienteKeys),
+        ...(isObject(body.cliente) ? body.cliente : {}),
+    };
+
     return {
         ...(body.nivel_detalle !== undefined || body.nivelDetalle !== undefined
             ? { nivel_detalle: normalizeNivelDetalle(body.nivel_detalle ?? body.nivelDetalle) }
@@ -289,7 +371,7 @@ function normalizeFormatoA(body) {
             importe_anualidad: body.importe_anualidad,
             annuityAmount: body.annuityAmount,
         }),
-        cliente: normalizeCliente(body.cliente),
+        cliente: normalizeCliente(mergedCliente),
         vehiculo: normalizeVehiculo(body.vehiculo),
         credito: normalizeCredito(body.credito),
         seguro: normalizeSeguro(body.seguro),
@@ -320,6 +402,10 @@ function normalizeFormatoB(body) {
         "fecha_nacimiento",
         "rfc",
         "numero_unidades_solicitar",
+        "cliente_cetelem_actual",
+        "cliente_kia",
+        "cliente_fidelity",
+        "tipo_cliente_fidelity",
         "customerName",
         "customerAPaterno",
         "customerAMaterno",
