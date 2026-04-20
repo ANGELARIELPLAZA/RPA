@@ -562,6 +562,15 @@ async function etapaAbrirCotizador(popup) {
 
     await popup.waitForLoadState("domcontentloaded");
     await popup.waitForTimeout(1500);
+
+    // A veces el cotizador no termina de "activar" la vista hasta recibir una interacción.
+    // Reintenta Enter en el popup para estabilizar la pantalla inicial.
+    await popup.bringToFront().catch(() => { });
+    await popup.mouse.click(10, 10).catch(() => { });
+    for (let i = 0; i < 2; i += 1) {
+        await popup.keyboard.press("Enter").catch(() => { });
+        await popup.waitForTimeout(500);
+    }
 }
 
 /* =========================

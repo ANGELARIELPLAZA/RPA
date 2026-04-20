@@ -1,4 +1,7 @@
 const { formatDateTime, formatShortDuration } = require("../utils/time");
+const fs = require("fs");
+const path = require("path");
+const { SCREENSHOTS_DIR } = require("../config");
 
 const tasks = new Map();
 
@@ -35,6 +38,24 @@ function toPublicStatus(task) {
                 ? Date.parse(task.fecha_ejecucion)
                 : null;
     const fechaEjecucion = fechaMs ? formatDateTime(new Date(fechaMs)) : null;
+
+    let screenshotBase64 = null;
+    if (task.status === "fallido" && task.screenshot_url) {
+        try {
+            const match = String(task.screenshot_url).match(/\/screenshots\/([^?#]+)/i);
+            const filename = match ? decodeURIComponent(match[1]) : null;
+            if (filename) {
+                const resolved = path.resolve(SCREENSHOTS_DIR, filename);
+                const root = path.resolve(SCREENSHOTS_DIR) + path.sep;
+                if (resolved.startsWith(root) && fs.existsSync(resolved)) {
+                    screenshotBase64 = fs.readFileSync(resolved).toString("base64");
+                }
+            }
+        } catch {
+            screenshotBase64 = null;
+        }
+    }
+
     return {
         task_id: task.task_id,
         status: task.status,
@@ -46,6 +67,7 @@ function toPublicStatus(task) {
         etapa_numero: task.etapa_numero,
         ...(task.detalle ? { detalle: task.detalle } : {}),
         ...(task.screenshot_url ? { screenshot_url: task.screenshot_url } : {}),
+        ...(screenshotBase64 ? { screenshot: { base64: screenshotBase64 } } : {}),
     };
 }
 
