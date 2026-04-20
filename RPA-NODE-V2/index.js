@@ -249,6 +249,14 @@ function findOptionMatch(selectSnapshot, desiredRaw) {
     return null;
 }
 
+function formatOptionsList(selectSnapshot, { limit = 80 } = {}) {
+    const options = Array.isArray(selectSnapshot?.options) ? selectSnapshot.options : [];
+    const slice = options.slice(0, Math.max(0, limit));
+    const lines = slice.map((o) => `${String(o.value)}="${String(o.label || "").trim()}"`);
+    const suffix = options.length > slice.length ? ` ... (+${options.length - slice.length})` : "";
+    return lines.join(", ") + suffix;
+}
+
 async function esperarYSeleccionar(page, selector, value, timeout = 30000) {
     const desired = normalizeString(value);
     const hooks = page?.__rpaHooks;
@@ -283,12 +291,25 @@ async function esperarYSeleccionar(page, selector, value, timeout = 30000) {
     const match = findOptionMatch(snap, desired);
 
     if (!match) {
-        const optionsPreview = snap.options
-            .slice(0, 20)
-            .map((o) => `${o.value}:${o.label}`)
-            .join(", ");
+        const optionsList = formatOptionsList(snap, { limit: selector === "#gapInsurancePlan" ? 200 : 80 });
+
+        // Caso especial: plan GAP. Tomar evidencia antes de fallar.
+        if (selector === "#gapInsurancePlan") {
+            if (hooks?.onProgress) {
+                await hooks.onProgress({ page, message: `No se encontró opción en ${selector} (deseado=${desired}). Capturando evidencia...` }).catch(() => { });
+            }
+
+            await locator.scrollIntoViewIfNeeded().catch(() => { });
+            await locator.click({ timeout: 2000 }).catch(() => { });
+            await page.waitForTimeout(250);
+
+            if (hooks?.onErrorScreenshot) {
+                await hooks.onErrorScreenshot({ page }).catch(() => { });
+            }
+        }
+
         throw new Error(
-            `Opción no encontrada para ${selector} (deseado="${desired}", actual="${snap.value}" label="${snap.selectedLabel}", opciones=${snap.optionsCount}): ${optionsPreview}`
+            `Opción no encontrada para ${selector} (deseado="${desired}", actual="${snap.value}" label="${snap.selectedLabel}", opciones=${snap.optionsCount}): ${optionsList}`
         );
     }
 
@@ -734,6 +755,7 @@ async function etapaSeguro(popup, data) {
     const nivelDetalle = normalizeString(data?.nivel_detalle ?? data?.nivelDetalle).toLowerCase();
     const soloListaAseguradoras = nivelDetalle === "seguros";
 
+    await waitUntilEnabled(popup, "#insuranceCP", { timeout: 60000, pollMs: 300 });
     await esperarYLlenar(popup, "#insuranceCP", s.insuranceCP);
     await popup.mouse.click(10, 10);
     await popup.waitForTimeout(2000);
@@ -779,6 +801,66 @@ async function etapaSeguro(popup, data) {
 function isBadGatewayText(value) {
     const text = String(value || "").toLowerCase();
     return text.includes("502 bad gateway") || text.includes("bad gateway");
+}
+
+async function waitUntilEnabled(page, selector, { timeout = 15000, pollMs = 250 } = {}) {
+    const hooks = page?.__rpaHooks;
+
+    const progressMessage = `Esperando ${selector} habilitado`;
+    const started = Date.now();
+    let lastProgressAt = 0;
+
+    const emitProgress = async () => {
+        if (!hooks?.onProgress) return;
+        const now = Date.now();
+        if (now - lastProgressAt < 1000) return;
+        lastProgressAt = now;
+        await hooks.onProgress({ page, message: progressMessage }).catch(() => { });
+    };
+
+    await emitProgress();
+
+    const isEnabled = (sel) => {
+        const candidates = Array.from(document.querySelectorAll(sel));
+        const visible = candidates.find((el) => {
+            if (!el) return false;
+            const style = window.getComputedStyle(el);
+            if (!style) return false;
+            if (style.display === "none" || style.visibility === "hidden" || style.opacity === "0") return false;
+            // offsetParent null puede ser fixed/absolute; aún así sirve como señal rápida
+            return true;
+        });
+        if (!visible) return { ok: false, reason: "not_found" };
+
+        const disabledProp = Boolean(visible.disabled);
+        const disabledAttr = visible.getAttribute?.("disabled") !== null;
+        const ariaDisabled = String(visible.getAttribute?.("aria-disabled") || "").toLowerCase() === "true";
+        const readOnly = Boolean(visible.readOnly) || visible.getAttribute?.("readonly") !== null;
+
+        const ok = !disabledProp && !disabledAttr && !ariaDisabled && !readOnly;
+        return {
+            ok,
+            disabledProp,
+            disabledAttr,
+            ariaDisabled,
+            readOnly,
+            tag: visible.tagName,
+        };
+    };
+
+    try {
+        await page.waitForFunction(isEnabled, selector, { timeout, polling: pollMs });
+        return true;
+    } catch (e) {
+        const state = await page.evaluate(isEnabled, selector).catch(() => null);
+        throw new Error(
+            `Timeout esperando ${selector} habilitado (${timeout}ms). Estado: ${state ? JSON.stringify(state) : "n/a"}`
+        );
+    } finally {
+        if (Date.now() - started > 900) {
+            await emitProgress();
+        }
+    }
 }
 
 function createBadGatewayWatcher(page, getStage) {
@@ -888,7 +970,9 @@ async function runCetelemFlow(payload, hooks = {}) {
             });
         }
 
-        if (!isSeguros && data?.credito && Object.keys(data.credito).length) {
+        // En algunos casos, el portal habilita campos de seguro (como CP) solo después de definir crédito.
+        // Por eso, en modo "seguros" no se omite crédito si viene payload.
+        if (data?.credito && Object.keys(data.credito).length) {
             await stage("credito", async () => etapaCredito(popup, data));
         }
 

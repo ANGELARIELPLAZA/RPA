@@ -132,6 +132,30 @@ function normalizeSeguro(value) {
     return seguro;
 }
 
+function normalizeCredito(value) {
+    const credito = isObject(value) ? { ...value } : {};
+
+    if (credito.creditDepositPlan === undefined && credito.plan_credito !== undefined) {
+        credito.creditDepositPlan = credito.plan_credito;
+    }
+
+    if (credito.creditDepositTerm === undefined && credito.plazo_credito !== undefined) {
+        credito.creditDepositTerm = credito.plazo_credito;
+    }
+
+    if (credito.creditDepositAmount === undefined && credito.enganche_monto !== undefined) {
+        credito.creditDepositAmount = credito.enganche_monto;
+    }
+
+    for (const key of ["creditDepositAmount", "creditDepositPlan", "creditDepositTerm"]) {
+        if (credito[key] !== undefined && credito[key] !== null) {
+            credito[key] = String(credito[key]).trim();
+        }
+    }
+
+    return credito;
+}
+
 function pick(obj, keys) {
     const out = {};
     for (const key of keys) {
@@ -147,7 +171,7 @@ function normalizeFormatoA(body) {
             : {}),
         cliente: isObject(body.cliente) ? body.cliente : {},
         vehiculo: normalizeVehiculo(body.vehiculo),
-        credito: isObject(body.credito) ? body.credito : {},
+        credito: normalizeCredito(body.credito),
         seguro: normalizeSeguro(body.seguro),
     };
 }
@@ -200,7 +224,14 @@ function normalizeFormatoB(body) {
         "gapInsuranceType",
     ];
 
-    const creditoKeys = ["creditDepositAmount", "creditDepositPlan", "creditDepositTerm"];
+    const creditoKeys = [
+        "enganche_monto",
+        "creditDepositAmount",
+        "plan_credito",
+        "creditDepositPlan",
+        "plazo_credito",
+        "creditDepositTerm",
+    ];
 
     const seguroKeys = [
         "codigo_postal",
@@ -223,7 +254,7 @@ function normalizeFormatoB(body) {
             : {}),
         cliente: pick(body, clienteKeys),
         vehiculo: normalizeVehiculo(pick(body, vehiculoKeys)),
-        credito: pick(body, creditoKeys),
+        credito: normalizeCredito(pick(body, creditoKeys)),
         seguro: normalizeSeguro(pick(body, seguroKeys)),
     };
 }

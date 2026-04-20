@@ -15,7 +15,7 @@ function buildFlowStages(normalizedPayload) {
 
     if (!skipCliente && isNonEmptyObject(normalizedPayload?.cliente)) stages.push({ name: "cliente" });
     if (isNonEmptyObject(normalizedPayload?.vehiculo)) stages.push({ name: "vehiculo" });
-    if (!isSeguros && isNonEmptyObject(normalizedPayload?.credito)) stages.push({ name: "credito" });
+    if (isNonEmptyObject(normalizedPayload?.credito)) stages.push({ name: "credito" });
     if (isSeguros || isNonEmptyObject(normalizedPayload?.seguro)) stages.push({ name: "seguro" });
     stages.push({ name: "finalizando" });
 
