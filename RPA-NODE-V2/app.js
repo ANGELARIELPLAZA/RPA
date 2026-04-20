@@ -5,6 +5,7 @@ const logger = require("./core/logger");
 const healthRoutes = require("./routes/health");
 const statusRoutes = require("./routes/status");
 const cetelemRoutes = require("./routes/cetelem");
+const tasksRoutes = require("./routes/tasks");
 
 function createApp() {
     const app = express();
@@ -17,6 +18,7 @@ function createApp() {
 
     app.use(healthRoutes);
     app.use(statusRoutes);
+    app.use(tasksRoutes);
     app.use(cetelemRoutes);
 
     app.get("/", (req, res) => {

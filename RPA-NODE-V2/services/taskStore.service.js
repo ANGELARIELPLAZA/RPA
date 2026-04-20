@@ -29,7 +29,7 @@ function computeElapsedMs(task) {
     return Math.max(0, end - start);
 }
 
-function toPublicStatus(task, { includePayload = false } = {}) {
+function toPublicStatus(task, { includePayload = false, includeScreenshotBase64 = true } = {}) {
     const elapsedMs = computeElapsedMs(task);
     const fechaMs =
         typeof task.fecha_ejecucion === "number"
@@ -40,7 +40,7 @@ function toPublicStatus(task, { includePayload = false } = {}) {
     const fechaEjecucion = fechaMs ? formatDateTime(new Date(fechaMs)) : null;
 
     let screenshotBase64 = null;
-    if (task.status === "fallido" && task.screenshot_url) {
+    if (includeScreenshotBase64 && task.status === "fallido" && task.screenshot_url) {
         try {
             const match = String(task.screenshot_url).match(/\/screenshots\/([^?#]+)/i);
             const filename = match ? decodeURIComponent(match[1]) : null;
