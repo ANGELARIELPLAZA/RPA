@@ -39,16 +39,25 @@ function formatearSalidaCliente(data) {
             rango_anualidad: p?.rango_anualidad || { minimo: null, maximo: null },
         }));
 
+        const aseguradoras = primas_formateadas.map((p) => ({
+            nombre: p.aseguradora,
+            prima: p.monto,
+        }));
+
         return {
             estatus_code: 1,
             nivel_detalle: nivel_detalle || "seguros",
             mensaje_det: "Primas de seguros consultadas exitosamente",
             primas_seguros: primas_formateadas,
+            // Compatibilidad: algunos clientes consumen esto "plano"
+            aseguradoras,
             data: {
-                aseguradoras: primas.map((p) => ({
-                    nombre: String(p?.aseguradora ?? "").trim(),
-                    prima: formatPrima(p?.monto),
-                })),
+                aseguradoras,
+                // Compatibilidad: si el consumidor se queda con `response.data`
+                estatus_code: 1,
+                nivel_detalle: nivel_detalle || "seguros",
+                mensaje_det: "Primas de seguros consultadas exitosamente",
+                primas_seguros: primas_formateadas,
             },
         };
     }
@@ -58,6 +67,7 @@ function formatearSalidaCliente(data) {
             estatus_code: 0,
             nivel_detalle: nivel_detalle || "seguros",
             mensaje_det: sanitizeDetalle(data?.detalle),
+            aseguradoras: [],
             data: null,
         };
     }
@@ -66,6 +76,7 @@ function formatearSalidaCliente(data) {
         estatus_code: 2,
         nivel_detalle: nivel_detalle || "seguros",
         mensaje_det: sanitizeDetalle(data?.detalle ?? data?.status ?? "En progreso"),
+        aseguradoras: [],
         data: null,
     };
 }
