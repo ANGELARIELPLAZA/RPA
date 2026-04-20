@@ -1,9 +1,27 @@
 const path = require("path");
+const fs = require("fs");
 const BrowserManager = require("../../../RPA-NODE-V2/core/browser-manager");
 const { LOGIN_URL, SCREENSHOTS_DIR, USUARIO, PASSWORD } = require("../../../RPA-NODE-V2/config");
 
 function empty(value) {
     return value === undefined || value === null || String(value).trim() === "";
+}
+
+function safePathSegment(value) {
+    return String(value ?? "")
+        .trim()
+        .replace(/[^\w.-]+/g, "_")
+        .replace(/^_+|_+$/g, "")
+        .slice(0, 120) || "run";
+}
+
+function ensureDir(dirPath) {
+    fs.mkdirSync(dirPath, { recursive: true });
+}
+
+function writeTextFile(filePath, content) {
+    ensureDir(path.dirname(filePath));
+    fs.writeFileSync(filePath, content, { encoding: "utf8" });
 }
 
 async function esperarOverlayCarga(page, { selector = "#contenedor_carga", timeout = 90000 } = {}) {
@@ -189,7 +207,7 @@ async function dismissRfcErrorDialog(page) {
     return true;
 }
 
-async function runCetelemFlow(payload) {
+async function runCetelemFlow(payload, options = {}) {
     const browser = await BrowserManager.getBrowser();
     const context = await browser.newContext({
         viewport: { width: 1366, height: 900 },
@@ -197,6 +215,10 @@ async function runCetelemFlow(payload) {
 
     const page = await context.newPage();
     let popup;
+    const consoleBuffer = [];
+    const taskId = payload?.task_id || payload?.taskId || options?.task_id || options?.taskId || Date.now();
+    const artifactPrefix = safePathSegment(taskId);
+    const artifactBaseName = `task_${artifactPrefix}_${Date.now()}`;
 
     try {
         await page.goto(LOGIN_URL, {
@@ -214,6 +236,32 @@ async function runCetelemFlow(payload) {
 
         popup = await popupPromise;
         await popup.waitForLoadState("domcontentloaded", { timeout: 30000 });
+
+        popup.on("console", (msg) => {
+            consoleBuffer.push({
+                ts: new Date().toISOString(),
+                type: msg.type(),
+                text: msg.text(),
+                location: msg.location(),
+            });
+        });
+
+        popup.on("pageerror", (err) => {
+            consoleBuffer.push({
+                ts: new Date().toISOString(),
+                type: "pageerror",
+                text: String(err?.message || err),
+            });
+        });
+
+        popup.on("requestfailed", (request) => {
+            const failure = request.failure();
+            consoleBuffer.push({
+                ts: new Date().toISOString(),
+                type: "requestfailed",
+                text: `${request.method()} ${request.url()}${failure?.errorText ? ` -> ${failure.errorText}` : ""}`,
+            });
+        });
 
         await popup.waitForURL("https://cck.creditoclick.com.mx/cotizador/01-cotizacion.html", {
             timeout: 30000,
@@ -758,6 +806,24 @@ async function runCetelemFlow(payload) {
             ok: true,
             screenshotPath,
         };
+    } catch (e) {
+        const errorMessage = String(e?.message || e);
+
+        const consolePath = path.join(SCREENSHOTS_DIR, `${artifactBaseName}_console.json`);
+        const htmlPath = path.join(SCREENSHOTS_DIR, `${artifactBaseName}.html`);
+
+        try {
+            writeTextFile(consolePath, JSON.stringify({ taskId, errorMessage, logs: consoleBuffer }, null, 2));
+        } catch (_) { }
+
+        try {
+            if (popup) {
+                const html = await popup.content();
+                writeTextFile(htmlPath, html);
+            }
+        } catch (_) { }
+
+        throw e;
     } finally {
         if (popup) await popup.close().catch(() => { });
         await page.close().catch(() => { });
