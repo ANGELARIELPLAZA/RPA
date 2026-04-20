@@ -15,6 +15,11 @@ function normalizeCliente(value) {
         cliente.customerType = cliente.tipo_persona;
     }
 
+    // Alias: titulo -> customerTitle
+    if (cliente.customerTitle === undefined && cliente.titulo !== undefined) {
+        cliente.customerTitle = cliente.titulo;
+    }
+
     return cliente;
 }
 
@@ -196,6 +201,7 @@ function normalizeFormatoB(body) {
         "tipo_persona",
         "customerType",
         "genero",
+        "titulo",
         "customerTitle",
         "customerName",
         "customerAPaterno",
