@@ -53,6 +53,7 @@ function mapPrimasSegurosFromResult(result) {
             anualidad_requerida: true,
             rango_anualidad: { minimo: null, maximo: null },
         }))
+        // Solo devolver primas > 0.
         .filter((x) => x.aseguradora && x.monto !== null && x.monto !== 0);
 }
 
@@ -92,6 +93,7 @@ function toPublicStatus(task, { includePayload = false, includeScreenshotBase64 
     return {
         task_id: task.task_id,
         status: task.status,
+        tarea: nivelDetalle || "",
         ...(fechaEjecucion ? { fecha_ejecucion: fechaEjecucion } : {}),
         ...(fechaMs ? { fecha_ejecucion_ms: fechaMs } : {}),
         tiempo_transcurrido: formatShortDuration(elapsedMs),

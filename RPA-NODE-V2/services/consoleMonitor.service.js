@@ -23,15 +23,16 @@ function render(snapshot, options = {}) {
     const rows = (snapshot.recentTasks || []).slice(0, maxTasks).map((t) => {
         const id = truncate(t.task_id, 8);
         const status = truncate(t.status, 12);
+        const tarea = truncate(t.tarea || t.nivel_detalle || "", 16);
         const etapa = truncate(t.etapa_nombre, 12);
         const avance = truncate(t.etapa_numero, 7);
         const tiempo = truncate(t.tiempo_transcurrido, 10);
         const err = t.detalle ? ` | ${truncate(t.detalle, 42)}` : t.screenshot_url ? ` | ${truncate(t.screenshot_url, 42)}` : "";
-        return `${pad(id, 12)} ${pad(status, 12)} ${pad(etapa, 12)} ${pad(avance, 7)} ${pad(tiempo, 10)}${err}`;
+        return `${pad(id, 12)} ${pad(status, 12)} ${pad(tarea, 16)} ${pad(etapa, 12)} ${pad(avance, 7)} ${pad(tiempo, 10)}${err}`;
     });
 
-    const sep = "-".repeat(50);
-    const tableHead = `TASK_ID      STATUS       ETAPA        AVANCE  TIEMPO     DETALLE/URL`;
+    const tableHead = `TASK_ID      STATUS       TAREA            ETAPA        AVANCE  TIEMPO     DETALLE/URL`;
+    const sep = "-".repeat(Math.max(50, tableHead.length));
     const body = rows.length ? rows.join("\n") : "(sin tareas)";
 
     return `${sep}\n${header}\n${line2}\n${sep}\n${tableHead}\n${body}\n${sep}\n`;
@@ -98,4 +99,3 @@ function startConsoleMonitor(getSnapshot, options = {}) {
 module.exports = {
     startConsoleMonitor,
 };
-

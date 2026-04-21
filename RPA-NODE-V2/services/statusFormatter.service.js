@@ -140,8 +140,6 @@ function formatearSalidaCliente(data) {
         estatus_code: 2,
         nivel_detalle: nivel_detalle || "seguros",
         mensaje_det: sanitizeDetalle(data?.detalle ?? data?.status ?? "En progreso"),
-        aseguradoras: [],
-        data: null,
     };
 }
 module.exports = {
