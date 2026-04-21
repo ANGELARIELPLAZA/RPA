@@ -124,9 +124,13 @@ function assertCredentials() {
 }
 
 function resolveCredentialsForAgencia(agencia) {
-    const key = normalizeAgenciaKey(agencia);
+    const agenciaResolved = agencia || process.env.AGENCIA || process.env.DEFAULT_AGENCIA;
+    const key = normalizeAgenciaKey(agenciaResolved);
+
     if (!key) {
-        throw new Error("Falta agencia para resolver credenciales (CREDENTIALS_BY_AGENCIA).");
+        throw new Error(
+            "Falta agencia para resolver credenciales (envia agencia en payload o define AGENCIA/DEFAULT_AGENCIA en .env)."
+        );
     }
 
     const availableKeys = Object.keys(CREDENTIALS_BY_AGENCIA || {});
@@ -143,7 +147,7 @@ function resolveCredentialsForAgencia(agencia) {
     const creds = CREDENTIALS_BY_AGENCIA[key];
     if (!creds?.usuario || !creds?.password) {
         throw new Error(
-            `No hay credenciales configuradas para la agencia "${String(agencia)}" (key="${key}", disponibles=${availableKeys.join(",")}).`
+            `No hay credenciales configuradas para la agencia "${String(agenciaResolved)}" (key="${key}", disponibles=${availableKeys.join(",")}).`
         );
     }
 
