@@ -1,0 +1,109 @@
+{
+  "uid": "rpa-overview",
+  "title": "RPA Overview",
+  "tags": ["rpa", "overview"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "10s",
+  "time": { "from": "now-6h", "to": "now" },
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": { "type": "grafana", "uid": "-- Grafana --" },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "templating": { "list": [] },
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Total ejecuciones",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "x": 0, "y": 0, "w": 6, "h": 4 },
+      "targets": [{ "expr": "rpa_executions_total", "refId": "A" }],
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "orientation": "auto" },
+      "fieldConfig": { "defaults": { "unit": "none" }, "overrides": [] }
+    },
+    {
+      "type": "stat",
+      "title": "En progreso",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "x": 6, "y": 0, "w": 6, "h": 4 },
+      "targets": [{ "expr": "rpa_executions_by_status{status=\"En progreso\"}", "refId": "A" }],
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "orientation": "auto" }
+    },
+    {
+      "type": "stat",
+      "title": "Completadas",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "x": 12, "y": 0, "w": 6, "h": 4 },
+      "targets": [{ "expr": "rpa_executions_by_status{status=\"completado\"}", "refId": "A" }],
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "orientation": "auto" }
+    },
+    {
+      "type": "stat",
+      "title": "Fallidas",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "x": 18, "y": 0, "w": 6, "h": 4 },
+      "targets": [{ "expr": "rpa_executions_by_status{status=\"fallido\"}", "refId": "A" }],
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "orientation": "auto" }
+    },
+    {
+      "type": "stat",
+      "title": "DuraciÃ³n promedio (ms) - completado",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "x": 0, "y": 4, "w": 8, "h": 4 },
+      "targets": [{ "expr": "rpa_execution_duration_avg_ms{status=\"completado\"}", "refId": "A" }],
+      "fieldConfig": { "defaults": { "unit": "ms" }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] } }
+    },
+    {
+      "type": "stat",
+      "title": "DuraciÃ³n p95 (ms) - completado",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "x": 8, "y": 4, "w": 8, "h": 4 },
+      "targets": [{ "expr": "rpa_execution_duration_p95_ms{status=\"completado\"}", "refId": "A" }],
+      "fieldConfig": { "defaults": { "unit": "ms" }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] } }
+    },
+    {
+      "type": "stat",
+      "title": "Health - rpa-node-v2",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "x": 16, "y": 4, "w": 4, "h": 4 },
+      "targets": [{ "expr": "probe_success{instance=\"http://rpa-node-v2:3000/health\"}", "refId": "A" }],
+      "fieldConfig": { "defaults": { "mappings": [{ "type": "value", "options": { "0": { "text": "DOWN" }, "1": { "text": "UP" } } }] } }
+    },
+    {
+      "type": "stat",
+      "title": "Health - tracking",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "x": 20, "y": 4, "w": 4, "h": 4 },
+      "targets": [{ "expr": "probe_success{instance=\"http://rpa-tracking-service:3100/health\"}", "refId": "A" }],
+      "fieldConfig": { "defaults": { "mappings": [{ "type": "value", "options": { "0": { "text": "DOWN" }, "1": { "text": "UP" } } }] } }
+    },
+    {
+      "type": "bargauge",
+      "title": "Fallos por etapa (top)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "x": 0, "y": 8, "w": 12, "h": 8 },
+      "targets": [{ "expr": "rpa_failures_by_stage_total", "refId": "A", "legendFormat": "{{stage}}" }],
+      "options": { "displayMode": "gradient", "showUnfilled": true, "reduceOptions": { "calcs": ["lastNotNull"] } }
+    },
+    {
+      "type": "logs",
+      "title": "Errores recientes (logs)",
+      "datasource": { "type": "loki", "uid": "loki" },
+      "gridPos": { "x": 12, "y": 8, "w": 12, "h": 8 },
+      "targets": [{ "expr": "{service=~\"rpa-node-v2|rpa-tracking-service\"} |~ \"(?i)error|exception|fail\"", "refId": "A" }],
+      "options": { "showLabels": true, "wrapLogMessage": true, "sortOrder": "Descending" }
+    }
+  ]
+}

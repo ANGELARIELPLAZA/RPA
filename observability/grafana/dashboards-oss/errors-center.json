@@ -1,0 +1,41 @@
+{
+  "uid": "rpa-errors-center",
+  "title": "Errors Center",
+  "tags": ["rpa", "errors"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "10s",
+  "time": { "from": "now-6h", "to": "now" },
+  "templating": { "list": [] },
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "Errores por servicio (logs)",
+      "datasource": { "type": "loki", "uid": "loki" },
+      "gridPos": { "x": 0, "y": 0, "w": 12, "h": 6 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (service) (count_over_time({service=~\"rpa-node-v2|rpa-tracking-service\", level=~\"error|fatal\"}[5m]))"
+        }
+      ]
+    },
+    {
+      "type": "bargauge",
+      "title": "Fallos por etapa (Prometheus)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "x": 12, "y": 0, "w": 12, "h": 6 },
+      "targets": [{ "refId": "A", "expr": "rpa_failures_by_stage_total", "legendFormat": "{{stage}}" }],
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] } }
+    },
+    {
+      "type": "logs",
+      "title": "Errores (logs)",
+      "datasource": { "type": "loki", "uid": "loki" },
+      "gridPos": { "x": 0, "y": 6, "w": 24, "h": 8 },
+      "targets": [{ "refId": "A", "expr": "{service=~\"rpa-node-v2|rpa-tracking-service\"} |~ \"(?i)error|exception|fail\"" }],
+      "options": { "showLabels": true, "wrapLogMessage": true, "sortOrder": "Descending" }
+    }
+  ]
+}

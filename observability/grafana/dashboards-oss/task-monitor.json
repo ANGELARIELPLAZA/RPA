@@ -1,0 +1,32 @@
+{
+  "uid": "rpa-task-monitor",
+  "title": "Task Monitor",
+  "tags": ["rpa", "task"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "10s",
+  "time": { "from": "now-6h", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "task_id",
+        "label": "task_id",
+        "type": "textbox",
+        "hide": 0,
+        "query": "",
+        "current": { "text": "", "value": "" }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "logs",
+      "title": "Logs por task_id",
+      "datasource": { "type": "loki", "uid": "loki" },
+      "gridPos": { "x": 0, "y": 0, "w": 24, "h": 14 },
+      "targets": [{ "expr": "{service=~\"rpa-node-v2|rpa-tracking-service\"} |~ \"$task_id\"", "refId": "A" }],
+      "options": { "showLabels": true, "wrapLogMessage": true, "sortOrder": "Descending" }
+    }
+  ]
+}

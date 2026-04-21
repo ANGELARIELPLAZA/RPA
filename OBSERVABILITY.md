@@ -2,8 +2,8 @@
 
 ## Arquitectura (final)
 - Logs: `promtail -> loki -> grafana`
-- Métricas: `node-exporter + cadvisor + blackbox-exporter + rpa-tracking-service(/metrics/prometheus) -> prometheus -> grafana`
-- Datos RPA: `MongoDB (executions / execution_events) -> Grafana MongoDB datasource`
+- MÃ©tricas: `node-exporter + cadvisor + blackbox-exporter + rpa-tracking-service(/metrics/prometheus) -> prometheus -> grafana`
+- Datos RPA (opcional): `MongoDB (executions / execution_events) -> Grafana MongoDB datasource (Enterprise)`
 
 ## Servicios / URLs
 - RPA API: `http://localhost:3000`
@@ -20,19 +20,24 @@
 docker compose up --build -d
 ```
 
+MongoDB datasource (Enterprise / con licencia):
+```bash
+docker compose -f docker-compose.yml -f docker-compose.enterprise.yml up --build -d
+```
+
 Opcionales:
 ```bash
 docker compose --profile dev up --build -d
 docker compose --profile analysis up --build -d
 ```
 
-## Validación rápida
+## ValidaciÃ³n rÃ¡pida
 1) Prometheus targets: `http://localhost:9090/targets` (UP: loki, promtail, node-exporter, cadvisor, blackbox, rpa-tracking-service).
-2) Grafana datasources: `Connections -> Data sources` (Prometheus/Loki/MongoDB).
+2) Grafana datasources: `Connections -> Data sources` (Prometheus/Loki; MongoDB solo con Enterprise).
 3) Loki recibe logs:
    - Explore -> Loki -> `{service=~"rpa-node-v2|rpa-tracking-service"}`
 4) Dashboards provisionados: carpeta **RPA** (RPA Overview, Task Monitor, Logs en tiempo real, Errors Center, Server Monitoring, Docker / Containers Monitoring).
 
 ## Notas
 - `node-exporter` y `cAdvisor` asumen host Linux (montajes `/proc`, `/sys`, `/var/lib/docker`). En Docker Desktop (Windows/Mac) pueden requerir ajustes.
-
+- Si ves `Enterprise License Error` o `license.jwt not found`, estÃ¡s intentando usar el plugin `grafana-mongodb-datasource` sin licencia. Usa `docker-compose.enterprise.yml` y coloca `./observability/grafana/license.jwt`.

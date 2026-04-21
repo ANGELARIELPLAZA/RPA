@@ -91,6 +91,7 @@ pnpm-debug.log*
 # =========================
 *.pid
 docker-compose.override.yml
+observability/grafana/license.jwt
 
 # =========================
 # Archivos temporales
