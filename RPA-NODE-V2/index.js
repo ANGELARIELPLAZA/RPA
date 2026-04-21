@@ -1,5 +1,5 @@
 const BrowserManager = require("./core/browser-manager");
-const { CETELEM_URL, USUARIO, PASSWORD, MAX_REINTENTOS, resolvePasswordForAgencia } = require("./config");
+const { CETELEM_URL, MAX_REINTENTOS, resolveCredentialsForAgencia } = require("./config");
 const logger = require("./core/logger");
 
 const DEFAULT_DATA = {
@@ -544,7 +544,10 @@ function waitForPopupOrNewPage(openerPage, timeoutMs = 15000) {
 /* =========================
    ETAPA 1 - LOGIN
 ========================= */
-async function etapaLogin(page, { usuario = USUARIO, password = PASSWORD } = {}) {
+async function etapaLogin(page, { usuario, password } = {}) {
+    if (empty(usuario) || empty(password)) {
+        throw new Error("Faltan credenciales (usuario/password).");
+    }
     await page.goto(CETELEM_URL, {
         waitUntil: "domcontentloaded",
         timeout: 30000,
@@ -1275,10 +1278,7 @@ function createBadGatewayWatcher(page, getStage) {
 ========================= */
 async function runCetelemFlow(payload, hooks = {}) {
     const data = payload || DEFAULT_DATA;
-    const credentials = {
-        usuario: USUARIO,
-        password: resolvePasswordForAgencia(data?.agencia),
-    };
+    const credentials = resolveCredentialsForAgencia(data?.agencia);
 
     const browser = await BrowserManager.getBrowser();
     const context = await browser.newContext({

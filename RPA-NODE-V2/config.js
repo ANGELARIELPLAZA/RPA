@@ -7,9 +7,6 @@ dotenv.config({
     quiet: true,
 });
 
-const USUARIO = process.env.USUARIO;
-const PASSWORD = process.env.PASSWORD;
-const AGENCIA_PASSWORD_STRICT = (process.env.AGENCIA_PASSWORD_STRICT || "false").toLowerCase() === "true";
 const HEADLESS = (process.env.HEADLESS || "true").toLowerCase() === "true";
 let recordVideoEnabled = (process.env.RECORD_VIDEO || "false").toLowerCase() === "true";
 
@@ -35,7 +32,7 @@ const STATUS_TIMEOUT_MS = Number(process.env.STATUS_TIMEOUT_MS || 4000);
 // Evidencias
 const SCREENSHOTS_DIR = path.resolve(__dirname, process.env.SCREENSHOTS_DIR || "./screenshots");
 
-// Base URL pública para construir screenshot_url
+// Base URL publica para construir screenshot_url
 const BASE_URL = String(process.env.BASE_URL || `http://localhost:${SERVER_PORT}`).replace(/\/+$/, "");
 
 // Observabilidad / monitor
@@ -78,8 +75,8 @@ function normalizeAgenciaKey(value) {
     return String(value ?? "").trim().toLowerCase();
 }
 
-function parsePasswordsByAgenciaEnv() {
-    const raw = process.env.PASSWORDS_BY_AGENCIA;
+function parseCredentialsByAgenciaEnv() {
+    const raw = process.env.CREDENTIALS_BY_AGENCIA;
     if (!raw) return {};
 
     try {
@@ -90,10 +87,17 @@ function parsePasswordsByAgenciaEnv() {
         for (const [k, v] of Object.entries(parsed)) {
             const key = normalizeAgenciaKey(k);
             if (!key) continue;
-            if (v === undefined || v === null) continue;
-            const pass = String(v);
-            if (!pass.trim()) continue;
-            out[key] = pass;
+            if (!v || typeof v !== "object" || Array.isArray(v)) continue;
+
+            const usuario = v.usuario ?? v.username ?? v.user;
+            const password = v.password ?? v.pass;
+
+            const usuarioStr = usuario === undefined || usuario === null ? "" : String(usuario).trim();
+            const passwordStr = password === undefined || password === null ? "" : String(password).trim();
+
+            if (!usuarioStr || !passwordStr) continue;
+
+            out[key] = { usuario: usuarioStr, password: passwordStr };
         }
         return out;
     } catch {
@@ -101,54 +105,35 @@ function parsePasswordsByAgenciaEnv() {
     }
 }
 
-const PASSWORDS_BY_AGENCIA = parsePasswordsByAgenciaEnv();
-
-function resolvePasswordForAgencia(agencia, { strict = AGENCIA_PASSWORD_STRICT } = {}) {
-    const key = normalizeAgenciaKey(agencia);
-
-    if (!key) {
-        if (!PASSWORD) {
-            throw new Error("No hay PASSWORD configurado (y no se enviÃ³ agencia).");
-        }
-        return PASSWORD;
-    }
-
-    if (PASSWORDS_BY_AGENCIA[key]) return PASSWORDS_BY_AGENCIA[key];
-
-    // Permite configurar una variable por agencia: PASSWORD_AGENCIA_<AGENCIA>
-    const envSuffix = String(agencia ?? "")
-        .trim()
-        .toUpperCase()
-        .replace(/[^A-Z0-9]+/g, "_")
-        .replace(/^_+|_+$/g, "");
-    if (envSuffix) {
-        const envKey = `PASSWORD_AGENCIA_${envSuffix}`;
-        const byEnv = process.env[envKey];
-        if (byEnv && String(byEnv).trim()) return String(byEnv);
-    }
-
-    if (strict) {
-        throw new Error(`No hay contraseÃ±a configurada para la agencia "${String(agencia)}".`);
-    }
-
-    if (PASSWORD) return PASSWORD;
-
-    // Si no hay fallback global, siempre es un error (aunque strict=false).
-    throw new Error(`No hay contraseÃ±a configurada para la agencia "${String(agencia)}".`);
-}
+const CREDENTIALS_BY_AGENCIA = parseCredentialsByAgenciaEnv();
 
 function assertCredentials() {
-    if (!USUARIO) {
-        throw new Error("Falta USUARIO en el archivo .env");
+    const hasCredentialsMap = Boolean(CREDENTIALS_BY_AGENCIA && Object.keys(CREDENTIALS_BY_AGENCIA).length);
+    if (!hasCredentialsMap) {
+        throw new Error("Falta CREDENTIALS_BY_AGENCIA (JSON) en el archivo .env");
+    }
+}
+
+function resolveCredentialsForAgencia(agencia) {
+    const key = normalizeAgenciaKey(agencia);
+    if (!key) {
+        throw new Error("Falta agencia para resolver credenciales (CREDENTIALS_BY_AGENCIA).");
     }
 
-    const hasDefaultPassword = Boolean(PASSWORD && String(PASSWORD).trim());
-    const hasMapPasswords = Boolean(PASSWORDS_BY_AGENCIA && Object.keys(PASSWORDS_BY_AGENCIA).length);
-    const hasAnyAgenciaEnv = Object.keys(process.env).some((k) => String(k || "").startsWith("PASSWORD_AGENCIA_"));
-
-    if (!hasDefaultPassword && !hasMapPasswords && !hasAnyAgenciaEnv) {
-        throw new Error("Falta PASSWORD (o PASSWORDS_BY_AGENCIA / PASSWORD_AGENCIA_<...>) en el archivo .env");
+    const creds = CREDENTIALS_BY_AGENCIA[key];
+    if (!creds?.usuario || !creds?.password) {
+        throw new Error(`No hay credenciales configuradas para la agencia "${String(agencia)}".`);
     }
+
+    return { usuario: creds.usuario, password: creds.password };
+}
+
+function resolveUsuarioForAgencia(agencia) {
+    return resolveCredentialsForAgencia(agencia).usuario;
+}
+
+function resolvePasswordForAgencia(agencia) {
+    return resolveCredentialsForAgencia(agencia).password;
 }
 
 function isRecordVideoEnabled() {
@@ -161,7 +146,6 @@ function setRecordVideoEnabled(enabled) {
 }
 
 module.exports = {
-    AGENCIA_PASSWORD_STRICT,
     BAD_URL_TOKEN,
     BASE_URL,
     DEFAULT_CLIENT_PAYLOAD,
@@ -173,8 +157,9 @@ module.exports = {
     MAX_REINTENTOS,
     MONITOR_ENABLED,
     MONITOR_REFRESH_MS,
-    PASSWORD,
     PING_TIMEOUT_MS,
+    resolveUsuarioForAgencia,
+    resolveCredentialsForAgencia,
     SCREENSHOTS_DIR,
     SERVER_HOST,
     SERVER_PORT,
@@ -185,7 +170,6 @@ module.exports = {
     TRACKING_ENABLED,
     TRACKING_SERVICE_URL,
     TRACKING_TIMEOUT_MS,
-    USUARIO,
     VIDEOS_DIR,
     assertCredentials,
     resolvePasswordForAgencia,

@@ -2,23 +2,28 @@
 
 ## Endpoints
 
-- `POST /cotizar-cetelem-async` (asíncrono)
+- `POST /cotizar-cetelem-async` (asincrono)
 - `GET /status/:task_id`
 - `GET /health`
 
-## Multi-agencia (password por request)
+## Multi-agencia (credenciales por request)
 
-Si el request incluye `agencia` (o `agency`), el robot puede usar una contraseÃ±a distinta por agencia.
+Si el request incluye `agencia` (o `agency`), el robot puede usar un usuario/password distinto por agencia.
 
-- ConfiguraciÃ³n: `PASSWORDS_BY_AGENCIA` (JSON) o `PASSWORD_AGENCIA_<AGENCIA>` en `.env`.
-- Fallback: si no hay match, usa `PASSWORD` (a menos que `AGENCIA_PASSWORD_STRICT=true`).
+- Configuracion (requerido): `CREDENTIALS_BY_AGENCIA` (JSON) en `.env`.
+
+Ejemplo `CREDENTIALS_BY_AGENCIA`:
+
+```bash
+CREDENTIALS_BY_AGENCIA={"primavera":{"usuario":"user1","password":"pass1"},"morelos_sur":{"usuario":"user2","password":"pass2"}}
+```
 
 ## Reglas clave
 
 - Antes de crear `task_id`, el API hace `ping` al portal (`CETELEM_URL`).
 - Si el portal responde `502/503` o hay error de red/timeout, responde inmediato `status=fallido` y **no** crea tarea.
-- Si el portal está disponible, responde inmediato `status=En progreso` + `task_id` y ejecuta el robot en background (con cola por `MAX_CONTEXTS`).
-- En error durante ejecución: toma screenshot y guarda **solo** `screenshot_url` público.
+- Si el portal esta disponible, responde inmediato `status=En progreso` + `task_id` y ejecuta el robot en background (con cola por `MAX_CONTEXTS`).
+- En error durante ejecucion: toma screenshot y guarda **solo** `screenshot_url` publico.
 
 ## Ejecutar local (Windows / Linux)
 

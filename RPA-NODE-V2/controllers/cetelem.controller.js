@@ -2,7 +2,7 @@ const crypto = require("crypto");
 const logger = require("../core/logger");
 const { formatDateTime } = require("../utils/time");
 const { pingPortal } = require("../services/portalHealth.service");
-const { BASE_URL, resolvePasswordForAgencia } = require("../config");
+const { BASE_URL, resolveCredentialsForAgencia } = require("../config");
 const { normalizeCotizacionPayload } = require("../services/payloadNormalizer.service");
 const { buildFlowStages } = require("../services/flowPlan.service");
 const taskStore = require("../services/taskStore.service");
@@ -61,7 +61,7 @@ async function cotizarCetelemAsync(req, res) {
 
     // 2.1) Validar credenciales por agencia (si estÃ¡ en modo estricto)
     try {
-        resolvePasswordForAgencia(normalizedPayload?.agencia);
+        resolveCredentialsForAgencia(normalizedPayload?.agencia);
     } catch (error) {
         return res.status(400).json({
             task_id,
@@ -164,7 +164,7 @@ module.exports = {
         }
 
         try {
-            resolvePasswordForAgencia(normalizedPayload?.agencia);
+            resolveCredentialsForAgencia(normalizedPayload?.agencia);
         } catch (error) {
             return res.status(400).json({
                 task_id,
