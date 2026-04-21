@@ -2,7 +2,7 @@ const crypto = require("crypto");
 const logger = require("../core/logger");
 const { formatDateTime } = require("../utils/time");
 const { pingPortal } = require("../services/portalHealth.service");
-const { BASE_URL } = require("../config");
+const { BASE_URL, resolvePasswordForAgencia } = require("../config");
 const { normalizeCotizacionPayload } = require("../services/payloadNormalizer.service");
 const { buildFlowStages } = require("../services/flowPlan.service");
 const taskStore = require("../services/taskStore.service");
@@ -54,6 +54,19 @@ async function cotizarCetelemAsync(req, res) {
             task_id,
             status: "Fallido",
             detail: error?.message || "payload inválido",
+            status_response,
+            screenshot: { base64: null },
+        });
+    }
+
+    // 2.1) Validar credenciales por agencia (si estÃ¡ en modo estricto)
+    try {
+        resolvePasswordForAgencia(normalizedPayload?.agencia);
+    } catch (error) {
+        return res.status(400).json({
+            task_id,
+            status: "Fallido",
+            detail: error?.message || "credenciales invÃ¡lidas",
             status_response,
             screenshot: { base64: null },
         });
@@ -145,6 +158,18 @@ module.exports = {
                 task_id,
                 status: "Fallido",
                 detail: error?.message || "payload inválido",
+                status_response,
+                screenshot: { base64: null },
+            });
+        }
+
+        try {
+            resolvePasswordForAgencia(normalizedPayload?.agencia);
+        } catch (error) {
+            return res.status(400).json({
+                task_id,
+                status: "Fallido",
+                detail: error?.message || "credenciales invÃ¡lidas",
                 status_response,
                 screenshot: { base64: null },
             });

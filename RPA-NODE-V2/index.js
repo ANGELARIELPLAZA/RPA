@@ -1,5 +1,5 @@
 const BrowserManager = require("./core/browser-manager");
-const { CETELEM_URL, USUARIO, PASSWORD, MAX_REINTENTOS } = require("./config");
+const { CETELEM_URL, USUARIO, PASSWORD, MAX_REINTENTOS, resolvePasswordForAgencia } = require("./config");
 const logger = require("./core/logger");
 
 const DEFAULT_DATA = {
@@ -544,16 +544,16 @@ function waitForPopupOrNewPage(openerPage, timeoutMs = 15000) {
 /* =========================
    ETAPA 1 - LOGIN
 ========================= */
-async function etapaLogin(page) {
+async function etapaLogin(page, { usuario = USUARIO, password = PASSWORD } = {}) {
     await page.goto(CETELEM_URL, {
         waitUntil: "domcontentloaded",
         timeout: 30000,
     });
 
-    await page.fill('input[name="userName"]', USUARIO);
+    await page.fill('input[name="userName"]', usuario);
     await clickConOverlay(page, "#btnEntrar", { timeout: 90000 });
 
-    await page.fill('input[name="userPassword"]', PASSWORD);
+    await page.fill('input[name="userPassword"]', password);
 
     // El portal a veces abre el cotizador en un popup (window.open) y otras veces navega en la misma pestaña.
     const targetPromise = waitForPopupOrNewPage(page, 60000);
@@ -590,7 +590,7 @@ async function etapaAbrirCotizador(popup) {
     });
     await popup.waitForTimeout(1500);
 
-    
+
 }
 
 /* =========================
@@ -604,7 +604,7 @@ async function etapaCliente(popup, data) {
     if (empty(c.customerName)) throw new Error("Falta campo requerido: customerName");
     if (empty(c.customerAPaterno)) throw new Error("Falta campo requerido: customerAPaterno");
     if (empty(c.customerBirthDate)) throw new Error("Falta campo requerido: customerBirthDate");
-    
+
     await esperarYSeleccionar(popup, "#customerType", c.customerType, 60000);
     await esperarYSeleccionar(popup, "#genero", c.genero);
     await esperarYSeleccionar(popup, "#customerTitle", c.customerTitle);
@@ -887,7 +887,7 @@ async function clickGuardarCotizacion(popup) {
         timeout: 10000
     });
 
-    await btn.scrollIntoViewIfNeeded().catch(() => {});
+    await btn.scrollIntoViewIfNeeded().catch(() => { });
 
     try {
         await btn.click({ timeout: 5000 });
@@ -909,7 +909,11 @@ async function etapaGuardarCotizacion(popup, data) {
         await esperarYSeleccionar(popup, "#annuityMonth", monthValue, 60000);
     }
 
-    if (cot.annuityAmount !== undefined && cot.annuityAmount !== null && String(cot.annuityAmount).trim() !== "") {
+    if (
+        cot.annuityAmount !== undefined &&
+        cot.annuityAmount !== null &&
+        String(cot.annuityAmount).trim() !== ""
+    ) {
         await esperarYLlenar(popup, "#annuityAmount", cot.annuityAmount);
         await popup.mouse.click(10, 10).catch(() => { });
         await popup.waitForTimeout(500);
@@ -918,21 +922,38 @@ async function etapaGuardarCotizacion(popup, data) {
     const maxWaitSeconds = 20;
     const waitIntervalMs = 500;
     const maxSaveAttempts = 2;
-    const saveData = {};
+    const saveData = {
+        folio: "",
+        mensualidad: 0.0,
+        backend: null,
+    };
 
     const routeHandler = async (route) => {
         const response = await route.fetch();
+
         try {
             const jsonData = await response.json().catch(() => null);
+
             if (jsonData && typeof jsonData === "object") {
-                saveData.folio = normalizeString(jsonData.folio ?? jsonData.numCotizacion ?? jsonData.num_cotizacion ?? "");
-                const mensualidadRaw = jsonData.mensualidad ?? jsonData.mensualiteAvecASM ?? 0.0;
+                saveData.folio = normalizeString(
+                    jsonData.folio ??
+                    jsonData.numCotizacion ??
+                    jsonData.num_cotizacion ??
+                    ""
+                );
+
+                const mensualidadRaw =
+                    jsonData.mensualidad ??
+                    jsonData.mensualiteAvecASM ??
+                    0.0;
+
                 saveData.mensualidad = Number(mensualidadRaw) || 0.0;
                 saveData.backend = jsonData;
             }
         } catch {
             // noop
         }
+
         await route.fulfill({ response });
     };
 
@@ -951,11 +972,15 @@ async function etapaGuardarCotizacion(popup, data) {
             if (hooks?.onProgress) {
                 await hooks.onProgress({
                     page: popup,
-                    message: attempt === 1 ? "Guardando cotizacion" : `Reintentando guardar cotizacion (${attempt}/${maxSaveAttempts})`,
+                    message:
+                        attempt === 1
+                            ? "Guardando cotizacion"
+                            : `Reintentando guardar cotizacion (${attempt}/${maxSaveAttempts})`,
                 }).catch(() => { });
             }
 
             const clicked = await clickGuardarCotizacion(popup);
+
             if (!clicked) {
                 return {
                     folio: null,
@@ -963,6 +988,7 @@ async function etapaGuardarCotizacion(popup, data) {
                     mensualidad: 0.0,
                     importe_pago_13: 0.0,
                     estatus_code: 0,
+                    json: saveData.backend || null,
                     mensaje_det: "Error: No se encontro boton para guardar cotizacion.",
                     logs: [],
                     phase_durations: {},
@@ -977,7 +1003,10 @@ async function etapaGuardarCotizacion(popup, data) {
 
             folio = normalizeString(saveData.folio) || null;
             mensualidad = Number(saveData.mensualidad) || 0.0;
-            backendJson = saveData.backend && typeof saveData.backend === "object" ? saveData.backend : null;
+            backendJson =
+                saveData.backend && typeof saveData.backend === "object"
+                    ? saveData.backend
+                    : null;
 
             if (folio) break;
 
@@ -991,7 +1020,9 @@ async function etapaGuardarCotizacion(popup, data) {
 
     const rfc =
         normalizeString(backendJson?.rfc_calculado) ||
-        normalizeString(await popup.locator("#customerRfc").first().inputValue().catch(() => "")) ||
+        normalizeString(
+            await popup.locator("#customerRfc").first().inputValue().catch(() => "")
+        ) ||
         null;
 
     const pago13Raw =
@@ -1005,8 +1036,12 @@ async function etapaGuardarCotizacion(popup, data) {
 
     if (!folio) {
         const msg = "Error: No se recibio folio del servidor tras el guardado.";
+
         if (hooks?.onProgress) {
-            await hooks.onProgress({ page: popup, message: msg }).catch(() => { });
+            await hooks.onProgress({
+                page: popup,
+                message: msg,
+            }).catch(() => { });
         }
 
         return {
@@ -1015,9 +1050,14 @@ async function etapaGuardarCotizacion(popup, data) {
             mensualidad: mensualidad || 0.0,
             importe_pago_13: importe_pago_13 || 0.0,
             estatus_code: 0,
+            json: backendJson,
             mensaje_det: msg,
             logs: Array.isArray(backendJson?.logs) ? backendJson.logs : [],
-            phase_durations: backendJson?.phase_durations && typeof backendJson.phase_durations === "object" ? backendJson.phase_durations : {},
+            phase_durations:
+                backendJson?.phase_durations &&
+                    typeof backendJson.phase_durations === "object"
+                    ? backendJson.phase_durations
+                    : {},
         };
     }
 
@@ -1025,9 +1065,19 @@ async function etapaGuardarCotizacion(popup, data) {
     await cerrarPopupGuardadoSiExiste(popup).catch(() => { });
 
     // Si hay folio, abrir impresión (best-effort)
-    await popup.locator('a:has-text("Imprimir")').first().click({ timeout: 8000 }).catch(() => { });
+    await popup
+        .locator('a:has-text("Imprimir")')
+        .first()
+        .click({ timeout: 8000 })
+        .catch(() => { });
+
     await popup.waitForTimeout(500);
-    await popup.locator('a:has-text("Imprimir Cotización"), a:has-text("Imprimir Cotizacion")').first().click({ timeout: 8000 }).catch(() => { });
+
+    await popup
+        .locator('a:has-text("Imprimir Cotización"), a:has-text("Imprimir Cotizacion")')
+        .first()
+        .click({ timeout: 8000 })
+        .catch(() => { });
 
     return {
         folio,
@@ -1035,9 +1085,14 @@ async function etapaGuardarCotizacion(popup, data) {
         mensualidad: mensualidad || 0.0,
         importe_pago_13: importe_pago_13 || 0.0,
         estatus_code: 1,
+        json: backendJson,
         mensaje_det: "EXITOSO",
         logs: Array.isArray(backendJson?.logs) ? backendJson.logs : [],
-        phase_durations: backendJson?.phase_durations && typeof backendJson.phase_durations === "object" ? backendJson.phase_durations : {},
+        phase_durations:
+            backendJson?.phase_durations &&
+                typeof backendJson.phase_durations === "object"
+                ? backendJson.phase_durations
+                : {},
     };
 }
 
@@ -1220,6 +1275,10 @@ function createBadGatewayWatcher(page, getStage) {
 ========================= */
 async function runCetelemFlow(payload, hooks = {}) {
     const data = payload || DEFAULT_DATA;
+    const credentials = {
+        usuario: USUARIO,
+        password: resolvePasswordForAgencia(data?.agencia),
+    };
 
     const browser = await BrowserManager.getBrowser();
     const context = await browser.newContext({
@@ -1241,7 +1300,7 @@ async function runCetelemFlow(payload, hooks = {}) {
 
     try {
         popup = await stage("login", async () => {
-            const pop = await etapaLogin(page);
+            const pop = await etapaLogin(page, credentials);
             await etapaAbrirCotizador(pop);
             return pop;
         });

@@ -6,6 +6,13 @@
 - `GET /status/:task_id`
 - `GET /health`
 
+## Multi-agencia (password por request)
+
+Si el request incluye `agencia` (o `agency`), el robot puede usar una contraseÃ±a distinta por agencia.
+
+- ConfiguraciÃ³n: `PASSWORDS_BY_AGENCIA` (JSON) o `PASSWORD_AGENCIA_<AGENCIA>` en `.env`.
+- Fallback: si no hay match, usa `PASSWORD` (a menos que `AGENCIA_PASSWORD_STRICT=true`).
+
 ## Reglas clave
 
 - Antes de crear `task_id`, el API hace `ping` al portal (`CETELEM_URL`).

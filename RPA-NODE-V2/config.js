@@ -9,6 +9,7 @@ dotenv.config({
 
 const USUARIO = process.env.USUARIO;
 const PASSWORD = process.env.PASSWORD;
+const AGENCIA_PASSWORD_STRICT = (process.env.AGENCIA_PASSWORD_STRICT || "false").toLowerCase() === "true";
 const HEADLESS = (process.env.HEADLESS || "true").toLowerCase() === "true";
 let recordVideoEnabled = (process.env.RECORD_VIDEO || "false").toLowerCase() === "true";
 
@@ -73,9 +74,80 @@ const DEFAULT_CLIENT_PAYLOAD = {
     },
 };
 
+function normalizeAgenciaKey(value) {
+    return String(value ?? "").trim().toLowerCase();
+}
+
+function parsePasswordsByAgenciaEnv() {
+    const raw = process.env.PASSWORDS_BY_AGENCIA;
+    if (!raw) return {};
+
+    try {
+        const parsed = JSON.parse(raw);
+        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+
+        const out = {};
+        for (const [k, v] of Object.entries(parsed)) {
+            const key = normalizeAgenciaKey(k);
+            if (!key) continue;
+            if (v === undefined || v === null) continue;
+            const pass = String(v);
+            if (!pass.trim()) continue;
+            out[key] = pass;
+        }
+        return out;
+    } catch {
+        return {};
+    }
+}
+
+const PASSWORDS_BY_AGENCIA = parsePasswordsByAgenciaEnv();
+
+function resolvePasswordForAgencia(agencia, { strict = AGENCIA_PASSWORD_STRICT } = {}) {
+    const key = normalizeAgenciaKey(agencia);
+
+    if (!key) {
+        if (!PASSWORD) {
+            throw new Error("No hay PASSWORD configurado (y no se enviÃ³ agencia).");
+        }
+        return PASSWORD;
+    }
+
+    if (PASSWORDS_BY_AGENCIA[key]) return PASSWORDS_BY_AGENCIA[key];
+
+    // Permite configurar una variable por agencia: PASSWORD_AGENCIA_<AGENCIA>
+    const envSuffix = String(agencia ?? "")
+        .trim()
+        .toUpperCase()
+        .replace(/[^A-Z0-9]+/g, "_")
+        .replace(/^_+|_+$/g, "");
+    if (envSuffix) {
+        const envKey = `PASSWORD_AGENCIA_${envSuffix}`;
+        const byEnv = process.env[envKey];
+        if (byEnv && String(byEnv).trim()) return String(byEnv);
+    }
+
+    if (strict) {
+        throw new Error(`No hay contraseÃ±a configurada para la agencia "${String(agencia)}".`);
+    }
+
+    if (PASSWORD) return PASSWORD;
+
+    // Si no hay fallback global, siempre es un error (aunque strict=false).
+    throw new Error(`No hay contraseÃ±a configurada para la agencia "${String(agencia)}".`);
+}
+
 function assertCredentials() {
-    if (!USUARIO || !PASSWORD) {
-        throw new Error("Faltan USUARIO o PASSWORD en el archivo .env");
+    if (!USUARIO) {
+        throw new Error("Falta USUARIO en el archivo .env");
+    }
+
+    const hasDefaultPassword = Boolean(PASSWORD && String(PASSWORD).trim());
+    const hasMapPasswords = Boolean(PASSWORDS_BY_AGENCIA && Object.keys(PASSWORDS_BY_AGENCIA).length);
+    const hasAnyAgenciaEnv = Object.keys(process.env).some((k) => String(k || "").startsWith("PASSWORD_AGENCIA_"));
+
+    if (!hasDefaultPassword && !hasMapPasswords && !hasAnyAgenciaEnv) {
+        throw new Error("Falta PASSWORD (o PASSWORDS_BY_AGENCIA / PASSWORD_AGENCIA_<...>) en el archivo .env");
     }
 }
 
@@ -89,6 +161,7 @@ function setRecordVideoEnabled(enabled) {
 }
 
 module.exports = {
+    AGENCIA_PASSWORD_STRICT,
     BAD_URL_TOKEN,
     BASE_URL,
     DEFAULT_CLIENT_PAYLOAD,
@@ -115,4 +188,5 @@ module.exports = {
     USUARIO,
     VIDEOS_DIR,
     assertCredentials,
+    resolvePasswordForAgencia,
 };

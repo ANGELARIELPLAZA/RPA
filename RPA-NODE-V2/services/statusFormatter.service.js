@@ -39,10 +39,16 @@ function formatearSalidaCliente(data) {
                 rfc_calculado: result?.rfc_calculado ?? null,
                 mensualidad: Number(result?.mensualidad ?? 0) || 0.0,
                 importe_pago_13: Number(result?.importe_pago_13 ?? 0) || 0.0,
-                estatus_code: Number.isFinite(Number(result?.estatus_code)) ? Number(result.estatus_code) : (result?.folio ? 1 : 0),
+                estatus_code: Number.isFinite(Number(result?.estatus_code))
+                    ? Number(result.estatus_code)
+                    : (result?.folio ? 1 : 0),
+                json: result?.json && typeof result.json === "object" ? result.json : null,
                 mensaje_det: String(result?.mensaje_det ?? (result?.folio ? "EXITOSO" : "Error")),
                 logs: Array.isArray(result?.logs) ? result.logs : [],
-                phase_durations: result?.phase_durations && typeof result.phase_durations === "object" ? result.phase_durations : {},
+                phase_durations:
+                    result?.phase_durations && typeof result.phase_durations === "object"
+                        ? result.phase_durations
+                        : {},
             };
         }
 
@@ -53,6 +59,7 @@ function formatearSalidaCliente(data) {
                 mensualidad: 0.0,
                 importe_pago_13: 0.0,
                 estatus_code: 0,
+                json: null,
                 mensaje_det: sanitizeDetalle(data?.detalle),
                 logs: [],
                 phase_durations: {},
@@ -65,6 +72,7 @@ function formatearSalidaCliente(data) {
             mensualidad: 0.0,
             importe_pago_13: 0.0,
             estatus_code: 2,
+            json: null,
             mensaje_det: sanitizeDetalle(data?.detalle ?? data?.status ?? "En progreso"),
             logs: [],
             phase_durations: {},
@@ -90,11 +98,9 @@ function formatearSalidaCliente(data) {
             nivel_detalle: nivel_detalle || "seguros",
             mensaje_det: "Primas de seguros consultadas exitosamente",
             primas_seguros: primas_formateadas,
-            // Compatibilidad: algunos clientes consumen esto "plano"
             aseguradoras,
             data: {
                 aseguradoras,
-                // Compatibilidad: si el consumidor se queda con `response.data`
                 estatus_code: 1,
                 nivel_detalle: nivel_detalle || "seguros",
                 mensaje_det: "Primas de seguros consultadas exitosamente",
@@ -121,7 +127,6 @@ function formatearSalidaCliente(data) {
         data: null,
     };
 }
-
 module.exports = {
     formatearSalidaCliente,
 };

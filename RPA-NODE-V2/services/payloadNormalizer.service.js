@@ -7,6 +7,11 @@ function normalizeNivelDetalle(value) {
     return raw ? raw.toLowerCase() : "";
 }
 
+function normalizeAgencia(value) {
+    const raw = String(value ?? "").trim();
+    return raw || "";
+}
+
 function normalizeCotizacion(value) {
     const cotizacion = isObject(value) ? { ...value } : {};
 
@@ -362,6 +367,7 @@ function normalizeFormatoA(body) {
     };
 
     return {
+        agencia: normalizeAgencia(body.agencia ?? body.agency),
         ...(body.nivel_detalle !== undefined || body.nivelDetalle !== undefined
             ? { nivel_detalle: normalizeNivelDetalle(body.nivel_detalle ?? body.nivelDetalle) }
             : {}),
@@ -476,6 +482,7 @@ function normalizeFormatoB(body) {
     ];
 
     return {
+        agencia: normalizeAgencia(body.agencia ?? body.agency),
         ...(body.nivel_detalle !== undefined || body.nivelDetalle !== undefined
             ? { nivel_detalle: normalizeNivelDetalle(body.nivel_detalle ?? body.nivelDetalle) }
             : {}),
