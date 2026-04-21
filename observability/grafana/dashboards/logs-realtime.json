@@ -1,0 +1,60 @@
+{
+  "uid": "rpa-logs-realtime",
+  "title": "Logs en tiempo real",
+  "tags": ["rpa", "logs"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "5s",
+  "time": { "from": "now-30m", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "service",
+        "label": "service",
+        "type": "query",
+        "datasource": { "type": "loki", "uid": "loki" },
+        "query": "label_values({environment=~\".*\"}, service)",
+        "refresh": 2,
+        "multi": true,
+        "includeAll": true,
+        "allValue": ".*",
+        "current": { "text": "All", "value": ".*" }
+      },
+      {
+        "name": "level",
+        "label": "level",
+        "type": "custom",
+        "query": "trace,debug,info,warn,error,fatal",
+        "multi": true,
+        "includeAll": true,
+        "allValue": ".*",
+        "current": { "text": "All", "value": ".*" }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "Volumen de logs (por servicio)",
+      "datasource": { "type": "loki", "uid": "loki" },
+      "gridPos": { "x": 0, "y": 0, "w": 24, "h": 6 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (service) (count_over_time({service=~\"$service\", level=~\"$level\"}[1m]))"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] }
+    },
+    {
+      "type": "logs",
+      "title": "Logs",
+      "datasource": { "type": "loki", "uid": "loki" },
+      "gridPos": { "x": 0, "y": 6, "w": 24, "h": 14 },
+      "targets": [{ "refId": "A", "expr": "{service=~\"$service\", level=~\"$level\"}" }],
+      "options": { "showLabels": true, "wrapLogMessage": true, "sortOrder": "Descending" }
+    }
+  ]
+}
+

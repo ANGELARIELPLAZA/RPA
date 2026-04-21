@@ -1,0 +1,12 @@
+apiVersion: 1
+
+providers:
+  - name: RPA
+    orgId: 1
+    folder: RPA
+    type: file
+    disableDeletion: true
+    editable: true
+    options:
+      path: /var/lib/grafana/dashboards
+

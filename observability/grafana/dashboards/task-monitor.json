@@ -1,0 +1,59 @@
+{
+  "uid": "rpa-task-monitor",
+  "title": "Task Monitor",
+  "tags": ["rpa", "task"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "10s",
+  "time": { "from": "now-6h", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "task_id",
+        "label": "task_id",
+        "type": "textbox",
+        "hide": 0,
+        "query": "",
+        "current": { "text": "", "value": "" }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "table",
+      "title": "Ejecución (Mongo)",
+      "datasource": { "type": "grafana-mongodb-datasource", "uid": "mongo" },
+      "gridPos": { "x": 0, "y": 0, "w": 24, "h": 7 },
+      "targets": [
+        {
+          "refId": "A",
+          "query": "rpa_tracking.executions.find({task_id:\"$task_id\"})"
+        }
+      ],
+      "options": { "showHeader": true }
+    },
+    {
+      "type": "table",
+      "title": "Eventos (Mongo)",
+      "datasource": { "type": "grafana-mongodb-datasource", "uid": "mongo" },
+      "gridPos": { "x": 0, "y": 7, "w": 12, "h": 10 },
+      "targets": [
+        {
+          "refId": "A",
+          "query": "rpa_tracking.execution_events.find({task_id:\"$task_id\"}).sort({createdAt:1}).limit(200)"
+        }
+      ],
+      "options": { "showHeader": true }
+    },
+    {
+      "type": "logs",
+      "title": "Logs por task_id",
+      "datasource": { "type": "loki", "uid": "loki" },
+      "gridPos": { "x": 12, "y": 7, "w": 12, "h": 10 },
+      "targets": [{ "expr": "{service=~\"rpa-node-v2|rpa-tracking-service\"} |~ \"$task_id\"", "refId": "A" }],
+      "options": { "showLabels": true, "wrapLogMessage": true, "sortOrder": "Descending" }
+    }
+  ]
+}
+

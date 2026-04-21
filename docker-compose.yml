@@ -33,7 +33,7 @@ services:
     depends_on:
       - rpa-tracking-service
     env_file:
-      - .env
+      - ./RPA-NODE-V2/.env
     ports:
       - "3000:3000"
     volumes:
@@ -49,21 +49,74 @@ services:
     ports:
       - "3101:3100"
     volumes:
-      - ./observability/loki-config.yml:/etc/loki/config.yml:ro
+      - ./observability/loki/config.yml:/etc/loki/config.yml:ro
       - loki_data:/loki
     restart: unless-stopped
 
   promtail:
     image: grafana/promtail:2.9.8
     container_name: promtail
-    command: -config.file=/etc/promtail/config.yml
+    command: -config.file=/etc/promtail/config.yml -config.expand-env=true
     depends_on:
       - loki
+    environment:
+      - ENVIRONMENT=production
     volumes:
-      - ./observability/promtail-config.yml:/etc/promtail/config.yml:ro
+      - ./observability/promtail/config.yml:/etc/promtail/config.yml:ro
       - ./RPA-NODE-V2/logs:/var/log/rpa-node-v2:ro
       - ./rpa-tracking-service/logs:/var/log/rpa-tracking-service:ro
       - promtail_positions:/tmp
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:v2.53.1
+    container_name: prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=15d
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    restart: unless-stopped
+
+  node-exporter:
+    image: prom/node-exporter:v1.8.1
+    container_name: node-exporter
+    command:
+      - --path.procfs=/host/proc
+      - --path.sysfs=/host/sys
+      - --path.rootfs=/rootfs
+      - --collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    restart: unless-stopped
+
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.49.1
+    container_name: cadvisor
+    ports:
+      - "8080:8080"
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:rw
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+    restart: unless-stopped
+
+  blackbox-exporter:
+    image: prom/blackbox-exporter:v0.25.0
+    container_name: blackbox-exporter
+    command:
+      - --config.file=/etc/blackbox/blackbox.yml
+    ports:
+      - "9115:9115"
+    volumes:
+      - ./observability/blackbox/blackbox.yml:/etc/blackbox/blackbox.yml:ro
     restart: unless-stopped
 
   grafana:
@@ -72,22 +125,24 @@ services:
     depends_on:
       - loki
       - mongo
+      - prometheus
     environment:
       - GF_SECURITY_ADMIN_USER=admin
       - GF_SECURITY_ADMIN_PASSWORD=admin
-      # MongoDB datasource es un plugin comunitario; útil para dashboards simples sobre executions/events.
       - GF_INSTALL_PLUGINS=grafana-mongodb-datasource
+      - GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH=/var/lib/grafana/dashboards/rpa-overview.json
     ports:
       - "3001:3000"
     volumes:
       - grafana_data:/var/lib/grafana
       - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
     restart: unless-stopped
 
   mongo-express:
     image: mongo-express:1.0.2
     container_name: mongo-express
-    profiles: [ "dev" ]
+    profiles: ["dev"]
     depends_on:
       - mongo
     environment:
@@ -101,7 +156,7 @@ services:
   metabase:
     image: metabase/metabase:v0.50.21
     container_name: metabase
-    profiles: [ "analysis" ]
+    profiles: ["analysis"]
     depends_on:
       - mongo
     ports:
@@ -113,4 +168,4 @@ volumes:
   grafana_data:
   loki_data:
   promtail_positions:
-
+  prometheus_data:

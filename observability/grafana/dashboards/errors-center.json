@@ -1,0 +1,68 @@
+{
+  "uid": "rpa-errors-center",
+  "title": "Errors Center",
+  "tags": ["rpa", "errors"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "10s",
+  "time": { "from": "now-6h", "to": "now" },
+  "templating": { "list": [] },
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "Errores por servicio (logs)",
+      "datasource": { "type": "loki", "uid": "loki" },
+      "gridPos": { "x": 0, "y": 0, "w": 12, "h": 6 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (service) (count_over_time({service=~\"rpa-node-v2|rpa-tracking-service\", level=~\"error|fatal\"}[5m]))"
+        }
+      ]
+    },
+    {
+      "type": "bargauge",
+      "title": "Fallos por etapa (Prometheus)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "x": 12, "y": 0, "w": 12, "h": 6 },
+      "targets": [{ "refId": "A", "expr": "rpa_failures_by_stage_total", "legendFormat": "{{stage}}" }],
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] } }
+    },
+    {
+      "type": "logs",
+      "title": "Errores (logs)",
+      "datasource": { "type": "loki", "uid": "loki" },
+      "gridPos": { "x": 0, "y": 6, "w": 24, "h": 8 },
+      "targets": [{ "refId": "A", "expr": "{service=~\"rpa-node-v2|rpa-tracking-service\"} |~ \"(?i)error|exception|fail\"" }],
+      "options": { "showLabels": true, "wrapLogMessage": true, "sortOrder": "Descending" }
+    },
+    {
+      "type": "table",
+      "title": "Top errores (Mongo) - detalle",
+      "datasource": { "type": "grafana-mongodb-datasource", "uid": "mongo" },
+      "gridPos": { "x": 0, "y": 14, "w": 12, "h": 9 },
+      "targets": [
+        {
+          "refId": "A",
+          "query": "rpa_tracking.executions.aggregate([{ $match: { status: \"fallido\", detalle: { $exists: true, $ne: \"\" } } }, { $group: { _id: \"$detalle\", count: { $sum: 1 } } }, { $sort: { count: -1 } }, { $limit: 10 }, { $project: { _id: 0, detalle: \"$_id\", count: 1 } }])"
+        }
+      ],
+      "options": { "showHeader": true }
+    },
+    {
+      "type": "table",
+      "title": "Errores por etapa (Mongo)",
+      "datasource": { "type": "grafana-mongodb-datasource", "uid": "mongo" },
+      "gridPos": { "x": 12, "y": 14, "w": 12, "h": 9 },
+      "targets": [
+        {
+          "refId": "A",
+          "query": "rpa_tracking.executions.aggregate([{ $match: { status: \"fallido\" } }, { $group: { _id: \"$etapa_nombre\", count: { $sum: 1 } } }, { $sort: { count: -1 } }, { $limit: 15 }, { $project: { _id: 0, etapa_nombre: \"$_id\", count: 1 } }])"
+        }
+      ],
+      "options": { "showHeader": true }
+    }
+  ]
+}
+
