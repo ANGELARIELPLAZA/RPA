@@ -12,6 +12,7 @@ let recordVideoEnabled = (process.env.RECORD_VIDEO || "false").toLowerCase() ===
 
 const SERVER_PORT = Number(process.env.PORT || 3000);
 const SERVER_HOST = process.env.HOST || "0.0.0.0";
+const TRUST_PROXY = (process.env.TRUST_PROXY || "false").toLowerCase() === "true";
 
 const MAX_REINTENTOS = Number(process.env.MAX_REINTENTOS || 3);
 const MAX_CONTEXTS = Number(process.env.MAX_CONTEXTS || 3);
@@ -35,6 +36,13 @@ const SCREENSHOTS_DIR = path.resolve(__dirname, process.env.SCREENSHOTS_DIR || "
 // Base URL publica para construir screenshot_url
 const BASE_URL = String(process.env.BASE_URL || `http://localhost:${SERVER_PORT}`).replace(/\/+$/, "");
 
+// Security (optional): if API_KEY is set, endpoints require it.
+const API_KEY = process.env.API_KEY || "";
+const CORS_ORIGINS = process.env.CORS_ORIGINS || "";
+const RATE_LIMIT_WINDOW_MS = Number(process.env.RATE_LIMIT_WINDOW_MS || 60_000);
+const RATE_LIMIT_MAX = Number(process.env.RATE_LIMIT_MAX || 120);
+const SCREENSHOTS_PUBLIC = (process.env.SCREENSHOTS_PUBLIC || "true").toLowerCase() === "true";
+
 // Observabilidad / monitor
 const MONITOR_ENABLED = (process.env.MONITOR_ENABLED || "true").toLowerCase() === "true";
 const MONITOR_REFRESH_MS = Number(process.env.MONITOR_REFRESH_MS || 1000);
@@ -43,6 +51,7 @@ const MONITOR_REFRESH_MS = Number(process.env.MONITOR_REFRESH_MS || 1000);
 const TRACKING_ENABLED = (process.env.TRACKING_ENABLED || "false").toLowerCase() === "true";
 const TRACKING_SERVICE_URL = process.env.TRACKING_SERVICE_URL || "http://rpa-tracking-service:3100";
 const TRACKING_TIMEOUT_MS = Number(process.env.TRACKING_TIMEOUT_MS || 3000);
+const TRACKING_API_KEY = process.env.TRACKING_API_KEY || "";
 
 // Directorios adicionales (logs / videos) con defaults razonables
 const LOGS_DIR = path.resolve(__dirname, process.env.LOGS_DIR || "./logs");
@@ -187,16 +196,24 @@ module.exports = {
     resolveUsuarioForAgencia,
     resolveCredentialsForAgencia,
     SCREENSHOTS_DIR,
+    SCREENSHOTS_PUBLIC,
     SERVER_HOST,
     SERVER_PORT,
+    TRUST_PROXY,
     STATUS_TIMEOUT_MS,
     setRecordVideoEnabled,
     TIPO_PERSONA_READY_VALUE,
     TIPO_PERSONA_SELECTOR,
     TRACKING_ENABLED,
+    TRACKING_API_KEY,
     TRACKING_SERVICE_URL,
     TRACKING_TIMEOUT_MS,
     VIDEOS_DIR,
     assertCredentials,
     resolvePasswordForAgencia,
+
+    API_KEY,
+    CORS_ORIGINS,
+    RATE_LIMIT_MAX,
+    RATE_LIMIT_WINDOW_MS,
 };

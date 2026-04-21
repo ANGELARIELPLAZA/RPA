@@ -2,6 +2,7 @@ const {
     TRACKING_ENABLED,
     TRACKING_SERVICE_URL,
     TRACKING_TIMEOUT_MS,
+    TRACKING_API_KEY,
 } = require("../config");
 const logger = require("../core/logger");
 const http = require("http");
@@ -22,7 +23,7 @@ async function postJson(url, body, timeoutMs) {
     try {
         const res = await fetch(url, {
             method: "POST",
-            headers: { "content-type": "application/json" },
+            headers: buildHeaders(),
             body: JSON.stringify(body || {}),
             signal: controller.signal,
         });
@@ -43,7 +44,7 @@ async function patchJson(url, body, timeoutMs) {
     try {
         const res = await fetch(url, {
             method: "PATCH",
-            headers: { "content-type": "application/json" },
+            headers: buildHeaders(),
             body: JSON.stringify(body || {}),
             signal: controller.signal,
         });
@@ -68,7 +69,7 @@ function requestJson(url, method, body, timeoutMs) {
                 port: parsed.port,
                 path: `${parsed.pathname}${parsed.search}`,
                 headers: {
-                    "content-type": "application/json",
+                    ...buildHeaders(),
                     "content-length": Buffer.byteLength(payload),
                 },
             },
@@ -88,6 +89,12 @@ function requestJson(url, method, body, timeoutMs) {
         req.write(payload);
         req.end();
     });
+}
+
+function buildHeaders() {
+    const headers = { "content-type": "application/json" };
+    if (TRACKING_API_KEY) headers.authorization = `Bearer ${TRACKING_API_KEY}`;
+    return headers;
 }
 
 function fireAndForget(promise) {

@@ -1,5 +1,6 @@
 const Execution = require("../models/Execution");
 const { toDate } = require("../utils/time");
+const { sanitizeMongoObject } = require("../utils/sanitize");
 
 function isErrorText(value) {
     if (typeof value !== "string") return false;
@@ -67,13 +68,15 @@ function normalizeExecutionUpdates(updates) {
 }
 
 async function createExecution(payload) {
-    const normalized = normalizeExecutionUpdates({ ...payload });
+    const cleaned = sanitizeMongoObject(payload || {});
+    const normalized = normalizeExecutionUpdates({ ...(cleaned || {}) });
     const doc = await Execution.create(normalized);
     return doc.toObject();
 }
 
 async function patchExecution(taskId, patch) {
-    const updates = normalizeExecutionUpdates({ ...patch });
+    const cleaned = sanitizeMongoObject(patch || {});
+    const updates = normalizeExecutionUpdates({ ...(cleaned || {}) });
 
     const doc = await Execution.findOneAndUpdate({ task_id: taskId }, { $set: updates }, { new: true });
     return doc ? doc.toObject() : null;
@@ -87,8 +90,8 @@ async function getExecution(taskId) {
 async function listExecutions(query) {
     const filter = {};
 
-    if (query.status) filter.status = query.status;
-    if (query.etapa_nombre) filter.etapa_nombre = query.etapa_nombre;
+    if (typeof query.status === "string" && query.status) filter.status = query.status;
+    if (typeof query.etapa_nombre === "string" && query.etapa_nombre) filter.etapa_nombre = query.etapa_nombre;
 
     if (query.from || query.to) {
         filter.createdAt = {};

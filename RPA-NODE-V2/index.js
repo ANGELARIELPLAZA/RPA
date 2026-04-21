@@ -523,13 +523,32 @@ async function obtenerOpcionesSeguro(page, timeout = 120000) {
 
     return opciones;
 }
-async function esperarTablaSeguroCargada(page, timeout = 30000, pollMs = 1000) {
+function parseMontoSeguro(raw) {
+    const text = String(raw || "").trim();
+    if (!text) return 0;
+    const normalized = text.replace(/,/g, "");
+    const numberLike = normalized.replace(/[^0-9.]/g, "");
+    const n = Number(numberLike);
+    return Number.isFinite(n) ? n : 0;
+}
+
+function signatureOpcionesSeguro(opciones) {
+    if (!Array.isArray(opciones)) return "";
+    return opciones
+        .map((o) => `${normalizeUppercase(o.aseguradora)}=${String(o.monto || "").trim()}`)
+        .join("|");
+}
+
+async function esperarTablaSeguroCargada(page, timeout = 30000, pollMs = 1000, previousSignature = "") {
     const start = Date.now();
 
     while (Date.now() - start < timeout) {
         const opciones = await obtenerOpcionesSeguro(page, 5000).catch(() => []);
-        if (tablaSeguroValida(opciones)) {
-            return opciones.filter(x => x.monto && x.monto !== "0.00");
+        const sig = signatureOpcionesSeguro(opciones);
+        const changed = !previousSignature || sig !== previousSignature;
+
+        if (changed && tablaSeguroValida(opciones)) {
+            return opciones.filter((x) => parseMontoSeguro(x.monto) > 0);
         }
 
         await page.waitForTimeout(pollMs);
@@ -537,11 +556,53 @@ async function esperarTablaSeguroCargada(page, timeout = 30000, pollMs = 1000) {
 
     return null;
 }
+
+async function recargarTablaSeguroDesdeSelector(page, selectorRecarga, valorCorrecto, timeout = 30000) {
+    const before = await obtenerOpcionesSeguro(page, 2000).catch(() => []);
+    const beforeSig = signatureOpcionesSeguro(before);
+
+    const desired = normalizeString(valorCorrecto);
+    await esperarYSeleccionar(page, selectorRecarga, desired, Math.min(60000, timeout));
+
+    const options = await page
+        .locator(selectorRecarga)
+        .first()
+        .evaluate((el) => {
+            const sel = el;
+            return Array.from(sel.options || []).map((o) => String(o.value || ""));
+        })
+        .catch(() => []);
+
+    const alt = options.find((v) => v && String(v) !== String(desired));
+    if (alt) {
+        await esperarYSeleccionar(page, selectorRecarga, alt, Math.min(60000, timeout)).catch(() => { });
+        await page.waitForTimeout(250);
+    }
+
+    // Re-selecciona el valor correcto para forzar recarga.
+    await esperarYSeleccionar(page, selectorRecarga, desired, Math.min(60000, timeout)).catch(async () => {
+        await page
+            .locator(selectorRecarga)
+            .first()
+            .evaluate((el, val) => {
+                const select = el;
+                select.value = String(val);
+                select.dispatchEvent(new Event("input", { bubbles: true }));
+                select.dispatchEvent(new Event("change", { bubbles: true }));
+            }, desired)
+            .catch(() => { });
+    });
+
+    return esperarTablaSeguroCargada(page, timeout, 1000, beforeSig);
+}
 async function esperarTablaSeguroConRecarga(page, selectorRecarga, valorCorrecto, options = {}) {
     const timeoutInicial = options.timeoutInicial ?? 15000;
     const timeoutRecarga = options.timeoutRecarga ?? 30000;
 
-    let tabla = await esperarTablaSeguroCargada(page, timeoutInicial);
+    const before = await obtenerOpcionesSeguro(page, 2000).catch(() => []);
+    const beforeSig = signatureOpcionesSeguro(before);
+
+    let tabla = await esperarTablaSeguroCargada(page, timeoutInicial, 1000, beforeSig);
 
     if (tabla) {
         return tabla;
@@ -566,7 +627,7 @@ async function esperarTablaSeguroConRecarga(page, selectorRecarga, valorCorrecto
 function tablaSeguroValida(opciones) {
     if (!Array.isArray(opciones) || opciones.length === 0) return false;
 
-    const montosValidos = opciones.filter(x => x.monto && x.monto !== "0.00");
+    const montosValidos = opciones.filter((x) => parseMontoSeguro(x.monto) > 0);
     return montosValidos.length > 0;
 }
 

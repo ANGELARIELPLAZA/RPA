@@ -1,5 +1,8 @@
 const express = require("express");
-const logger = require("./utils/logger");
+const helmet = require("helmet");
+const cors = require("cors");
+const rateLimit = require("express-rate-limit");
+const { CORS_ORIGINS, RATE_LIMIT_MAX, RATE_LIMIT_WINDOW_MS, TRUST_PROXY } = require("./config/env");
 
 const healthRoutes = require("./routes/health.routes");
 const executionsRoutes = require("./routes/executions.routes");
@@ -9,7 +12,27 @@ const errorHandler = require("./middlewares/errorHandler");
 
 function createApp() {
     const app = express();
+    if (TRUST_PROXY) app.set("trust proxy", 1);
     app.disable("x-powered-by");
+    app.use(helmet({ crossOriginResourcePolicy: false }));
+
+    if (CORS_ORIGINS && typeof CORS_ORIGINS === "string") {
+        const allow = CORS_ORIGINS.split(",")
+            .map((s) => s.trim())
+            .filter(Boolean);
+        if (allow.length) {
+            app.use(cors({ origin: allow, credentials: false }));
+        }
+    }
+
+    app.use(
+        rateLimit({
+            windowMs: RATE_LIMIT_WINDOW_MS,
+            limit: RATE_LIMIT_MAX,
+            standardHeaders: true,
+            legacyHeaders: false,
+        })
+    );
     app.use(express.json({ limit: "2mb" }));
 
     app.use(healthRoutes);
@@ -28,4 +51,3 @@ function createApp() {
 module.exports = {
     createApp,
 };
-

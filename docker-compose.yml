@@ -3,9 +3,16 @@ services:
     image: mongo:7
     container_name: mongo
     ports:
-      - "27017:27017"
+      - "127.0.0.1:27017:27017"
     volumes:
       - mongo_data:/data/db
+      - ./mongo-init:/docker-entrypoint-initdb.d:ro
+    environment:
+      - MONGO_INITDB_ROOT_USERNAME=${MONGO_ROOT_USERNAME:?Define MONGO_ROOT_USERNAME en .env}
+      - MONGO_INITDB_ROOT_PASSWORD=${MONGO_ROOT_PASSWORD:?Define MONGO_ROOT_PASSWORD en .env}
+      - MONGO_APP_DB=${MONGO_APP_DB:-rpa_tracking}
+      - MONGO_APP_USERNAME=${MONGO_APP_USERNAME:?Define MONGO_APP_USERNAME en .env}
+      - MONGO_APP_PASSWORD=${MONGO_APP_PASSWORD:?Define MONGO_APP_PASSWORD en .env}
     restart: unless-stopped
 
   rpa-tracking-service:
@@ -16,11 +23,13 @@ services:
     environment:
       - PORT=3100
       - NODE_ENV=production
-      - MONGO_URI=mongodb://mongo:27017/rpa_tracking
+      - MONGO_URI=mongodb://${MONGO_APP_USERNAME:?}:${MONGO_APP_PASSWORD:?}@mongo:27017/${MONGO_APP_DB:-rpa_tracking}?authSource=admin
       - SERVICE_NAME=rpa-tracking-service
       - REQUEST_TIMEOUT_MS=3000
       - LOG_TO_FILE=true
       - LOG_DIR=/app/logs
+      - API_KEY=${TRACKING_API_KEY:-}
+      - METRICS_PUBLIC=${TRACKING_METRICS_PUBLIC:-false}
     ports:
       - "3100:3100"
     volumes:
@@ -145,9 +154,9 @@ services:
     depends_on:
       - mongo
     environment:
-      - ME_CONFIG_MONGODB_URL=mongodb://mongo:27017
-      - ME_CONFIG_BASICAUTH_USERNAME=admin
-      - ME_CONFIG_BASICAUTH_PASSWORD=admin
+      - ME_CONFIG_MONGODB_URL=mongodb://${MONGO_ROOT_USERNAME}:${MONGO_ROOT_PASSWORD}@mongo:27017/?authSource=admin
+      - ME_CONFIG_BASICAUTH_USERNAME=${MONGO_EXPRESS_USER:-admin}
+      - ME_CONFIG_BASICAUTH_PASSWORD=${MONGO_EXPRESS_PASSWORD:-admin}
     ports:
       - "8081:8081"
     restart: unless-stopped

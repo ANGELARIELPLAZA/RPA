@@ -215,12 +215,16 @@ function normalizeVehiculo(value) {
         vehiculo.gapInsurance = vehiculo.seguro_gap;
     }
 
-    if (vehiculo.gapInsurancePlan === undefined && vehiculo.plan_gap !== undefined) {
-        vehiculo.gapInsurancePlan = vehiculo.plan_gap;
-    }
+    // Regla de negocio: si NO hay GAP (N), ignorar plan/tipo aunque vengan en payload.
+    const gapInsuranceValue = String(vehiculo.gapInsurance ?? "").trim().toUpperCase();
+    if (gapInsuranceValue !== "N") {
+        if (vehiculo.gapInsurancePlan === undefined && vehiculo.plan_gap !== undefined) {
+            vehiculo.gapInsurancePlan = vehiculo.plan_gap;
+        }
 
-    if (vehiculo.gapInsuranceType === undefined && vehiculo.tipo_pago_gap !== undefined) {
-        vehiculo.gapInsuranceType = vehiculo.tipo_pago_gap;
+        if (vehiculo.gapInsuranceType === undefined && vehiculo.tipo_pago_gap !== undefined) {
+            vehiculo.gapInsuranceType = vehiculo.tipo_pago_gap;
+        }
     }
 
     // Normaliza tipos esperados (selects/inputs suelen comparar strings)

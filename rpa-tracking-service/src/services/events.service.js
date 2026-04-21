@@ -1,7 +1,9 @@
 const ExecutionEvent = require("../models/ExecutionEvent");
+const { sanitizeMongoObject } = require("../utils/sanitize");
 
 async function createEvent(payload) {
-    const doc = await ExecutionEvent.create(payload);
+    const cleaned = sanitizeMongoObject(payload || {});
+    const doc = await ExecutionEvent.create(cleaned || {});
     return doc.toObject();
 }
 
@@ -15,4 +17,3 @@ module.exports = {
     createEvent,
     listEvents,
 };
-

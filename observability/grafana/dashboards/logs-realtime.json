@@ -14,12 +14,12 @@
         "label": "service",
         "type": "query",
         "datasource": { "type": "loki", "uid": "loki" },
-        "query": "label_values({environment=~\".*\"}, service)",
+        "query": "label_values({service=~\".+\"}, service)",
         "refresh": 2,
         "multi": true,
         "includeAll": true,
-        "allValue": ".*",
-        "current": { "text": "All", "value": ".*" }
+        "allValue": ".+",
+        "current": { "text": "All", "value": ".+" }
       },
       {
         "name": "level",
@@ -57,4 +57,3 @@
     }
   ]
 }
-
