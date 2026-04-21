@@ -501,27 +501,24 @@ async function esperarYSeleccionarAseguradora(page, aseguradora, timeout = 12000
     await page.waitForTimeout(1500);
 }
 async function obtenerOpcionesSeguro(page, timeout = 120000) {
-    await page.waitForSelector('input[type="radio"][name="insuranceOption"]', {
+    // Los radios pueden existir pero estar hidden; los montos normalmente viven en los labels.
+    await page.waitForSelector('label[for^="insuranceRadio_"]', {
         state: "attached",
         timeout,
     });
 
-    const opciones = await page.locator('input[type="radio"][name="insuranceOption"]').evaluateAll((els) => {
-        return els.map((el) => {
-            const id = el.id || "";
-            const aseguradora = id.replace(/^insuranceRadio_/, "").trim();
-
-            const label = document.querySelector(`label[for="${el.id}"]`);
-            const monto = (label?.textContent || "").trim();
-
-            return {
-                aseguradora,
-                monto,
-            };
-        });
+    const opciones = await page.locator('label[for^="insuranceRadio_"]').evaluateAll((els) => {
+        return els
+            .map((label) => {
+                const forId = label.getAttribute("for") || "";
+                const aseguradora = forId.replace(/^insuranceRadio_/, "").trim();
+                const monto = (label.textContent || "").trim();
+                return { aseguradora, monto };
+            })
+            .filter((x) => x.aseguradora);
     });
 
-    return opciones;
+    return Array.isArray(opciones) ? opciones : [];
 }
 function parseMontoSeguro(raw) {
     const text = String(raw || "").trim();
@@ -543,11 +540,34 @@ async function esperarTablaSeguroCargada(page, timeout = 30000, pollMs = 1000, p
     const start = Date.now();
 
     while (Date.now() - start < timeout) {
+        // En esta etapa el portal suele poner overlays (blockUI / contenedor_carga).
+        // No fallamos aquí: solo damos chance a que libere la UI antes de leer la tabla.
+        await esperarOverlayCarga(page, { timeout: Math.min(5000, pollMs * 5) }).catch(() => { });
+
         const opciones = await obtenerOpcionesSeguro(page, 5000).catch(() => []);
         const sig = signatureOpcionesSeguro(opciones);
         const changed = !previousSignature || sig !== previousSignature;
 
         if (changed && tablaSeguroValida(opciones)) {
+            return opciones.filter((x) => parseMontoSeguro(x.monto) > 0);
+        }
+
+        await page.waitForTimeout(pollMs);
+    }
+
+    return null;
+}
+
+async function esperarTablaSeguroActualizada(page, previousSignature, timeout = 60000, pollMs = 1000) {
+    const start = Date.now();
+
+    while (Date.now() - start < timeout) {
+        await esperarOverlayCarga(page, { timeout: Math.min(5000, pollMs * 5) }).catch(() => { });
+
+        const opciones = await obtenerOpcionesSeguro(page, 5000).catch(() => []);
+        const sig = signatureOpcionesSeguro(opciones);
+
+        if (sig && sig !== previousSignature && tablaSeguroValida(opciones)) {
             return opciones.filter((x) => parseMontoSeguro(x.monto) > 0);
         }
 
@@ -563,6 +583,12 @@ async function recargarTablaSeguroDesdeSelector(page, selectorRecarga, valorCorr
 
     const desired = normalizeString(valorCorrecto);
     await esperarYSeleccionar(page, selectorRecarga, desired, Math.min(60000, timeout));
+    await page.waitForTimeout(500);
+    await esperarOverlayCarga(page, { timeout: Math.min(60000, timeout) }).catch(() => { });
+
+    // Si el portal termina de cargar durante la ventana, regresamos sin forzar toggles.
+    const updated = await esperarTablaSeguroActualizada(page, beforeSig, Math.min(60000, timeout), 1000);
+    if (updated) return updated;
 
     const options = await page
         .locator(selectorRecarga)
@@ -576,7 +602,8 @@ async function recargarTablaSeguroDesdeSelector(page, selectorRecarga, valorCorr
     const alt = options.find((v) => v && String(v) !== String(desired));
     if (alt) {
         await esperarYSeleccionar(page, selectorRecarga, alt, Math.min(60000, timeout)).catch(() => { });
-        await page.waitForTimeout(250);
+        await page.waitForTimeout(500);
+        await esperarOverlayCarga(page, { timeout: Math.min(60000, timeout) }).catch(() => { });
     }
 
     // Re-selecciona el valor correcto para forzar recarga.
@@ -593,7 +620,10 @@ async function recargarTablaSeguroDesdeSelector(page, selectorRecarga, valorCorr
             .catch(() => { });
     });
 
-    return esperarTablaSeguroCargada(page, timeout, 1000, beforeSig);
+    await page.waitForTimeout(500);
+    await esperarOverlayCarga(page, { timeout: Math.min(60000, timeout) }).catch(() => { });
+
+    return esperarTablaSeguroActualizada(page, beforeSig, timeout, 1000);
 }
 async function esperarTablaSeguroConRecarga(page, selectorRecarga, valorCorrecto, options = {}) {
     const timeoutInicial = options.timeoutInicial ?? 15000;
@@ -602,7 +632,9 @@ async function esperarTablaSeguroConRecarga(page, selectorRecarga, valorCorrecto
     const before = await obtenerOpcionesSeguro(page, 2000).catch(() => []);
     const beforeSig = signatureOpcionesSeguro(before);
 
-    let tabla = await esperarTablaSeguroCargada(page, timeoutInicial, 1000, beforeSig);
+    // Evita recargar demasiado rápido: deja al portal terminar primero, pero retorna temprano si ya cargó.
+    const timeoutInicialEfectivo = Math.max(25000, timeoutInicial);
+    let tabla = await esperarTablaSeguroCargada(page, timeoutInicialEfectivo, 1000, beforeSig);
 
     if (tabla) {
         return tabla;
@@ -907,16 +939,22 @@ async function etapaSeguro(popup, data) {
     await esperarYSeleccionar(popup, "#insuranceType", s.insuranceType);
     await esperarYSeleccionar(popup, "#insurancePaymentTermRemnant", s.insurancePaymentTermRemnant);
     await esperarYSeleccionar(popup, "#insuranceCoverageLorant", normalizeUppercase(s.insuranceCoverageLorant));
+    await popup.mouse.click(10, 10).catch(() => { });
+    await esperarOverlayCarga(popup, { timeout: 60000 }).catch(() => { });
 
     const opcionesSeguro = await esperarTablaSeguroConRecarga(
         popup,
         "#insuranceCoverageLorant",
         normalizeUppercase(s.insuranceCoverageLorant),
         {
-            timeoutInicial: 15000,
-            timeoutRecarga: 30000,
+            timeoutInicial: 30000,
+            timeoutRecarga: 60000,
         }
     );
+
+    if (!Array.isArray(opcionesSeguro) || opcionesSeguro.length === 0) {
+        throw new Error("No se obtuvieron primas de seguro (tabla vacía).");
+    }
 
     if (soloListaAseguradoras || empty(s.insuranceOption)) {
         return opcionesSeguro;

@@ -88,6 +88,23 @@ function formatearSalidaCliente(data) {
             rango_anualidad: p?.rango_anualidad || { minimo: null, maximo: null },
         }));
 
+        if (primas_formateadas.length === 0) {
+            return {
+                estatus_code: 0,
+                nivel_detalle: nivel_detalle || "seguros",
+                mensaje_det: "No se obtuvieron primas de seguros",
+                primas_seguros: [],
+                aseguradoras: [],
+                data: {
+                    aseguradoras: [],
+                    estatus_code: 0,
+                    nivel_detalle: nivel_detalle || "seguros",
+                    mensaje_det: "No se obtuvieron primas de seguros",
+                    primas_seguros: [],
+                },
+            };
+        }
+
         const aseguradoras = primas_formateadas.map((p) => ({
             nombre: p.aseguradora,
             prima: p.monto,
