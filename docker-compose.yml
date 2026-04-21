@@ -32,13 +32,8 @@ services:
     container_name: rpa-node-v2
     depends_on:
       - rpa-tracking-service
-    environment:
-      - PORT=3000
-      - HOST=0.0.0.0
-      - NODE_ENV=production
-      - TRACKING_ENABLED=true
-      - TRACKING_SERVICE_URL=http://rpa-tracking-service:3100
-      - LOG_TO_FILE=true
+    env_file:
+      - .env
     ports:
       - "3000:3000"
     volumes:
@@ -92,7 +87,7 @@ services:
   mongo-express:
     image: mongo-express:1.0.2
     container_name: mongo-express
-    profiles: ["dev"]
+    profiles: [ "dev" ]
     depends_on:
       - mongo
     environment:
@@ -106,7 +101,7 @@ services:
   metabase:
     image: metabase/metabase:v0.50.21
     container_name: metabase
-    profiles: ["analysis"]
+    profiles: [ "analysis" ]
     depends_on:
       - mongo
     ports:
