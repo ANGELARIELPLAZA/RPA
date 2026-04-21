@@ -72,7 +72,11 @@ const DEFAULT_CLIENT_PAYLOAD = {
 };
 
 function normalizeAgenciaKey(value) {
-    return String(value ?? "").trim().toLowerCase();
+    return String(value ?? "")
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "_")
+        .replace(/^_+|_+$/g, "");
 }
 
 function parseCredentialsByAgenciaEnv() {
@@ -100,16 +104,21 @@ function parseCredentialsByAgenciaEnv() {
             out[key] = { usuario: usuarioStr, password: passwordStr };
         }
         return out;
-    } catch {
+    } catch (error) {
+        credentialsByAgenciaParseError = error;
         return {};
     }
 }
 
+let credentialsByAgenciaParseError = null;
 const CREDENTIALS_BY_AGENCIA = parseCredentialsByAgenciaEnv();
 
 function assertCredentials() {
     const hasCredentialsMap = Boolean(CREDENTIALS_BY_AGENCIA && Object.keys(CREDENTIALS_BY_AGENCIA).length);
     if (!hasCredentialsMap) {
+        if (credentialsByAgenciaParseError) {
+            throw new Error(`CREDENTIALS_BY_AGENCIA invalido (JSON): ${credentialsByAgenciaParseError.message}`);
+        }
         throw new Error("Falta CREDENTIALS_BY_AGENCIA (JSON) en el archivo .env");
     }
 }
@@ -120,9 +129,22 @@ function resolveCredentialsForAgencia(agencia) {
         throw new Error("Falta agencia para resolver credenciales (CREDENTIALS_BY_AGENCIA).");
     }
 
+    const availableKeys = Object.keys(CREDENTIALS_BY_AGENCIA || {});
+    if (!availableKeys.length) {
+        if (!process.env.CREDENTIALS_BY_AGENCIA) {
+            throw new Error("Falta CREDENTIALS_BY_AGENCIA (JSON) en el entorno.");
+        }
+        if (credentialsByAgenciaParseError) {
+            throw new Error(`CREDENTIALS_BY_AGENCIA invalido (JSON): ${credentialsByAgenciaParseError.message}`);
+        }
+        throw new Error("CREDENTIALS_BY_AGENCIA vacio o sin entradas validas (requiere usuario+password por agencia).");
+    }
+
     const creds = CREDENTIALS_BY_AGENCIA[key];
     if (!creds?.usuario || !creds?.password) {
-        throw new Error(`No hay credenciales configuradas para la agencia "${String(agencia)}".`);
+        throw new Error(
+            `No hay credenciales configuradas para la agencia "${String(agencia)}" (key="${key}", disponibles=${availableKeys.join(",")}).`
+        );
     }
 
     return { usuario: creds.usuario, password: creds.password };
