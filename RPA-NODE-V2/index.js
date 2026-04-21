@@ -54,7 +54,15 @@ function empty(value) {
 
 async function esperarOverlayCarga(page, { selector = "#contenedor_carga", timeout = 90000 } = {}) {
     try {
-        await page.locator(selector).waitFor({ state: "hidden", timeout });
+        const selectors = [
+            selector,
+            ".blockUI.blockOverlay",
+            ".window-mask",
+        ];
+
+        for (const sel of selectors) {
+            await page.locator(sel).waitFor({ state: "hidden", timeout });
+        }
     } catch (e) {
         const msg = String(e?.message || e);
         if (msg.includes("Execution context was destroyed") || msg.includes("Target closed") || msg.includes("Page closed")) {
@@ -163,7 +171,7 @@ async function fillBirthDateMasked(page, selector, value) {
 
     for (let attempt = 1; attempt <= 3; attempt += 1) {
         await page.waitForSelector(selector, { state: "visible", timeout: 15000 });
-        await page.click(selector);
+        await clickConOverlay(page, selector, { timeout: 30000 });
         await page.keyboard.press("Control+A");
         await page.keyboard.press("Backspace");
         await page.waitForTimeout(200);
@@ -171,6 +179,7 @@ async function fillBirthDateMasked(page, selector, value) {
         const delay = attempt === 1 ? 110 : attempt === 2 ? 160 : 220;
         await page.locator(selector).pressSequentially(expected, { delay });
         await page.locator(selector).press("Tab").catch(() => { });
+        await esperarOverlayCarga(page, { timeout: 30000 });
         await page.waitForTimeout(400);
 
         const got = await page.locator(selector).inputValue().catch(() => "");
@@ -198,8 +207,18 @@ async function fillBirthDateMasked(page, selector, value) {
 
 
 async function getBestSelectLocator(page, selector) {
-    const visible = page.locator(`${selector}:visible`).first();
-    if (await visible.count().catch(() => 0)) return visible;
+    const tryLocators = [
+        page.locator(`${selector}:visible:not([disabled])`).first(),
+        page.locator(`${selector}:not([disabled])`).first(),
+        page.locator(`${selector}:visible`).first(),
+        page.locator(selector).first(),
+    ];
+
+    for (const loc of tryLocators) {
+        const count = await loc.count().catch(() => 0);
+        if (count > 0) return loc;
+    }
+
     return page.locator(selector).first();
 }
 
@@ -281,14 +300,15 @@ async function esperarYSeleccionar(page, selector, value, timeout = 30000) {
             const nodes = Array.from(document.querySelectorAll(sel));
             const select = nodes.find((n) => n && n.tagName === "SELECT" && !n.disabled);
             if (!select) return false;
-            return (select.options?.length || 0) > 0;
+            // "0" o "1" suele ser placeholder, esperamos 2+
+            return (select.options?.length || 0) > 1;
         },
         selector,
         { timeout }
     );
 
-    const snap = await snapshotSelect(locator);
-    const match = findOptionMatch(snap, desired);
+    let snap = await snapshotSelect(locator);
+    let match = findOptionMatch(snap, desired);
 
     if (!match) {
         const optionsList = formatOptionsList(snap, { limit: selector === "#gapInsurancePlan" ? 200 : 80 });
@@ -325,13 +345,54 @@ async function esperarYSeleccionar(page, selector, value, timeout = 30000) {
         await hooks.onProgress({ page, message: `Seleccionando ${selector}=${desired}` }).catch(() => { });
     }
 
-    if (match.kind === "label") {
-        await locator.selectOption({ label: desired }, { timeout });
-    } else {
-        await locator.selectOption(desired, { timeout });
+    try {
+        if (match.kind === "label") {
+            await locator.selectOption({ label: desired }, { timeout });
+        } else {
+            await locator.selectOption(desired, { timeout });
+        }
+    } catch (error) {
+        // Fallback: setear por JS + disparar eventos (útil si el select está oculto o hay plugins).
+        const desiredValue =
+            match.kind === "label"
+                ? (snap.options.find((o) => String(o.label || "").toLowerCase() === desired.toLowerCase())?.value ?? "")
+                : desired;
+
+        if (!empty(desiredValue)) {
+            await locator.evaluate(
+                (el, val) => {
+                    const select = el;
+                    select.value = String(val);
+                    select.dispatchEvent(new Event("input", { bubbles: true }));
+                    select.dispatchEvent(new Event("change", { bubbles: true }));
+                },
+                desiredValue
+            ).catch(() => { });
+        } else {
+            throw error;
+        }
     }
 
     await page.waitForTimeout(1000);
+
+    // Verifica que quedó seleccionado; si no, reintenta una vez sobre un locator visible/enabled.
+    snap = await snapshotSelect(locator);
+    match = findOptionMatch(snap, desired);
+    if (!match || match.kind !== "already") {
+        const retryLocator = page.locator(`${selector}:visible:not([disabled])`).first();
+        const retryCount = await retryLocator.count().catch(() => 0);
+        if (retryCount > 0) {
+            if (hooks?.onProgress) {
+                await hooks.onProgress({ page, message: `Reintentando selección en ${selector} (visible/enabled)` }).catch(() => { });
+            }
+            if (match?.kind === "label") {
+                await retryLocator.selectOption({ label: desired }, { timeout }).catch(() => { });
+            } else {
+                await retryLocator.selectOption(desired, { timeout }).catch(() => { });
+            }
+            await page.waitForTimeout(500);
+        }
+    }
 }
 
 async function esperarOpcionesORecargar(page, selector, { timeout = 8000, maxReloads = 2 } = {}) {
@@ -621,6 +682,8 @@ async function etapaCliente(popup, data) {
 
     await fillBirthDateMasked(popup, "#customerBirthDate", c.customerBirthDate);
     await popup.waitForTimeout(1000);
+    // A veces el portal muestra un popup con boton "Ok" despues de capturar la fecha.
+    await cerrarPopupOkGenericoSiExiste(popup).catch(() => { });
 
     if (!empty(c.customerRfc)) {
         await esperarYLlenarUpper(popup, "#customerRfc", c.customerRfc);
@@ -906,20 +969,72 @@ async function etapaGuardarCotizacion(popup, data) {
 
     const cot = data?.cotizacion || {};
 
-    // Campos de anualidad (si existen)
-    if (!empty(cot.annuityMonth)) {
-        const monthValue = normalizeAnnuityMonth(cot.annuityMonth);
-        await esperarYSeleccionar(popup, "#annuityMonth", monthValue, 60000);
-    }
+    // Campos de anualidad: solo aplicar si el plan de crédito seleccionado es C/A.
+    // (El label del select #creditDepositPlan suele traer "C/A" cuando aplica.)
+    let creditDepositPlanLabel = "";
+    try {
+        const creditPlanLocator = await getBestSelectLocator(popup, "#creditDepositPlan");
+        const snap = await snapshotSelect(creditPlanLocator);
+        creditDepositPlanLabel = String(snap?.selectedLabel ?? "").trim();
+    } catch { }
 
-    if (
-        cot.annuityAmount !== undefined &&
-        cot.annuityAmount !== null &&
-        String(cot.annuityAmount).trim() !== ""
-    ) {
-        await esperarYLlenar(popup, "#annuityAmount", cot.annuityAmount);
-        await popup.mouse.click(10, 10).catch(() => { });
-        await popup.waitForTimeout(500);
+    const isCreditPlanCA = creditDepositPlanLabel.toUpperCase().includes("C/A");
+
+    logger.info(
+        `[cotizacion] anualidad: planLabel="${creditDepositPlanLabel || "N/A"}" isCA=${isCreditPlanCA} annuityMonth="${normalizeString(cot.annuityMonth)}" annuityAmount="${normalizeString(cot.annuityAmount)}"`
+    );
+    if (isCreditPlanCA) {
+        if (!empty(cot.annuityMonth)) {
+            const monthValue = normalizeAnnuityMonth(cot.annuityMonth);
+            if (monthValue) {
+                await esperarYSeleccionar(popup, "#annuityMonth", monthValue, 60000);
+            }
+        }
+
+        if (
+            cot.annuityAmount !== undefined &&
+            cot.annuityAmount !== null &&
+            String(cot.annuityAmount).trim() !== ""
+        ) {
+            const desiredAmount = String(cot.annuityAmount).replace(/,/g, "").trim();
+
+            await popup.waitForSelector("#annuityAmount", { state: "visible", timeout: 15000 });
+            await popup.waitForFunction(
+                (sel) => {
+                    const el = document.querySelector(sel);
+                    return !!el && !el.disabled;
+                },
+                "#annuityAmount",
+                { timeout: 15000 }
+            );
+
+            // 1) fill normal
+            await esperarYLlenar(popup, "#annuityAmount", desiredAmount);
+            await popup.mouse.click(10, 10).catch(() => { });
+            await popup.waitForTimeout(500);
+
+            let after = await popup.locator("#annuityAmount").inputValue().catch(() => "");
+            if (normalizeString(after) === "00.00" || normalizeString(after) === "0.00") {
+                // 2) fallback: set value + dispatch events (algunos onchange formatean/reset)
+                await popup.evaluate(({ sel, val }) => {
+                    const el = document.querySelector(sel);
+                    if (!el) return;
+                    el.value = String(val);
+                    el.dispatchEvent(new Event("input", { bubbles: true }));
+                    el.dispatchEvent(new Event("change", { bubbles: true }));
+                }, { sel: "#annuityAmount", val: desiredAmount }).catch(() => { });
+
+                await popup.mouse.click(10, 10).catch(() => { });
+                await popup.waitForTimeout(500);
+                after = await popup.locator("#annuityAmount").inputValue().catch(() => "");
+            }
+
+            logger.info(`[cotizacion] anualidad: annuityAmount desired="${desiredAmount}" after="${after}"`);
+        }
+    } else if (!empty(cot.annuityMonth) || !empty(cot.annuityAmount)) {
+        logger.info(
+            `[cotizacion] anualidad omitida: creditDepositPlan no es C/A (label="${creditDepositPlanLabel || "N/A"}")`
+        );
     }
 
     const maxWaitSeconds = 20;
@@ -927,7 +1042,7 @@ async function etapaGuardarCotizacion(popup, data) {
     const maxSaveAttempts = 2;
     const saveData = {
         folio: "",
-        mensualidad: 0.0,
+        mensualidad_1: 0.0,
         backend: null,
     };
 
@@ -945,12 +1060,16 @@ async function etapaGuardarCotizacion(popup, data) {
                     ""
                 );
 
-                const mensualidadRaw =
+                const mensualidad_1_Raw =
                     jsonData.mensualidad ??
                     jsonData.mensualiteAvecASM ??
                     0.0;
-
-                saveData.mensualidad = Number(mensualidadRaw) || 0.0;
+                const mensualidad_13_Raw =
+                    jsonData.mensualidad ??
+                    jsonData.mensualiteAvecASM ??
+                    0.0;
+                saveData.mensualidad_1 = Number(mensualidad_1_Raw) || 0.0;
+                saveData.mensualidad_13 = Number(mensualidad_13_Raw) || 0.0;
                 saveData.backend = jsonData;
             }
         } catch {
@@ -963,13 +1082,15 @@ async function etapaGuardarCotizacion(popup, data) {
     await popup.route("**/cotizacion/save", routeHandler);
 
     let folio = null;
-    let mensualidad = 0.0;
+    let mensualidad_1 = 0.0;
+    let mensualidad_13 = 0.0;
     let backendJson = null;
 
     try {
         for (let attempt = 1; attempt <= maxSaveAttempts; attempt += 1) {
             saveData.folio = "";
-            saveData.mensualidad = 0.0;
+            saveData.mensualidad_1 = 0.0;
+            saveData.mensualidad_13 = 0.0;
             saveData.backend = null;
 
             if (hooks?.onProgress) {
@@ -988,8 +1109,8 @@ async function etapaGuardarCotizacion(popup, data) {
                 return {
                     folio: null,
                     rfc_calculado: null,
-                    mensualidad: 0.0,
-                    importe_pago_13: 0.0,
+                    mensualidad_1: 0.0,
+                    mensualidad_13: 0.0,
                     estatus_code: 0,
                     json: saveData.backend || null,
                     mensaje_det: "Error: No se encontro boton para guardar cotizacion.",
@@ -1005,7 +1126,8 @@ async function etapaGuardarCotizacion(popup, data) {
             }
 
             folio = normalizeString(saveData.folio) || null;
-            mensualidad = Number(saveData.mensualidad) || 0.0;
+            mensualidad_1 = Number(saveData.mensualidad_1) || 0.0;
+            mensualidad_13 = Number(saveData.mensualidad_13) || 0.0;
             backendJson =
                 saveData.backend && typeof saveData.backend === "object"
                     ? saveData.backend
@@ -1050,8 +1172,8 @@ async function etapaGuardarCotizacion(popup, data) {
         return {
             folio: null,
             rfc_calculado: rfc,
-            mensualidad: mensualidad || 0.0,
-            importe_pago_13: importe_pago_13 || 0.0,
+            mensualidad_1: mensualidad_1 || 0.0,
+            mensualidad_13: mensualidad_13 || 0.0,
             estatus_code: 0,
             json: backendJson,
             mensaje_det: msg,
@@ -1085,8 +1207,8 @@ async function etapaGuardarCotizacion(popup, data) {
     return {
         folio,
         rfc_calculado: rfc,
-        mensualidad: mensualidad || 0.0,
-        importe_pago_13: importe_pago_13 || 0.0,
+        mensualidad_1: mensualidad_1 || 0.0,
+        mensualidad_13: mensualidad_13 || 0.0,
         estatus_code: 1,
         json: backendJson,
         mensaje_det: "EXITOSO",
@@ -1129,11 +1251,54 @@ async function cerrarPopupGuardadoSiExiste(page, { timeout = 8000 } = {}) {
     return false;
 }
 
+async function cerrarPopupOkGenericoSiExiste(page) {
+    const okBtn = page
+        .locator(
+            [
+                '.messager-body:visible .messager-button a:has-text("Ok")',
+                '.messager-body:visible .messager-button a:has-text("OK")',
+                '.messager-body:visible .messager-button a:has-text("Aceptar")',
+                '.messager-body:visible .messager-button a.l-btn:has(span.l-btn-text:has-text("Ok"))',
+                '.messager-body:visible .messager-button a.l-btn:has(span.l-btn-text:has-text("OK"))',
+                '.messager-body:visible .messager-button a.l-btn:has(span.l-btn-text:has-text("Aceptar"))',
+                '.window:visible a.l-btn:has(span.l-btn-text:has-text("Ok"))',
+                '.window:visible a.l-btn:has(span.l-btn-text:has-text("OK"))',
+                '.window:visible a.l-btn:has(span.l-btn-text:has-text("Aceptar"))',
+            ].join(", ")
+        )
+        .first();
+
+    const visible = await okBtn.isVisible().catch(() => false);
+    if (visible) {
+        await okBtn.click({ timeout: 2000 }).catch(async () => {
+            await okBtn.click({ timeout: 2000, force: true }).catch(() => { });
+        });
+        await page.waitForTimeout(300);
+        return true;
+    }
+
+    const messagerVisible = await page.locator(".messager-body:visible").first().isVisible().catch(() => false);
+    if (messagerVisible) {
+        return await cerrarPopupGuardadoSiExiste(page, { timeout: 1500 });
+    }
+
+    return false;
+}
+
 function normalizeAnnuityMonth(value) {
     const raw = normalizeString(value);
     if (!raw) return "";
-    const digits = raw.match(/\d+/)?.[0] || "";
-    if (digits) return String(Number(digits)).padStart(2, "0");
+    const lowered = raw.toLowerCase();
+    if (["-1", "seleccione", "selecciona", "select", "seleccionar"].includes(lowered)) return "";
+
+    const numericToken = raw.match(/-?\d+/)?.[0] ?? "";
+    if (numericToken) {
+        const monthNum = Number(numericToken);
+        if (Number.isFinite(monthNum) && monthNum >= 1 && monthNum <= 12) {
+            return String(monthNum).padStart(2, "0");
+        }
+        return "";
+    }
 
     const key = raw.toLowerCase();
     const map = {
@@ -1152,7 +1317,7 @@ function normalizeAnnuityMonth(value) {
         diciembre: "12",
     };
 
-    return map[key] || raw;
+    return map[key] || "";
 }
 
 function isBadGatewayText(value) {

@@ -37,8 +37,8 @@ function formatearSalidaCliente(data) {
             return {
                 folio: result?.folio ?? null,
                 rfc_calculado: result?.rfc_calculado ?? null,
-                mensualidad: Number(result?.mensualidad ?? 0) || 0.0,
-                importe_pago_13: Number(result?.importe_pago_13 ?? 0) || 0.0,
+                mensualidad_1: Number(result?.mensualidad_1 ?? 0) || 0.0,
+                mensualidad_13: Number(result?.mensualidad_13 ?? 0) || 0.0,
                 estatus_code: Number.isFinite(Number(result?.estatus_code))
                     ? Number(result.estatus_code)
                     : (result?.folio ? 1 : 0),
@@ -56,8 +56,8 @@ function formatearSalidaCliente(data) {
             return {
                 folio: null,
                 rfc_calculado: null,
-                mensualidad: 0.0,
-                importe_pago_13: 0.0,
+                mensualidad_1: 0.0,
+                mensualidad_13: 0.0,
                 estatus_code: 0,
                 json: null,
                 mensaje_det: sanitizeDetalle(data?.detalle),
@@ -69,8 +69,8 @@ function formatearSalidaCliente(data) {
         return {
             folio: null,
             rfc_calculado: null,
-            mensualidad: 0.0,
-            importe_pago_13: 0.0,
+            mensualidad_1: 0.0,
+            mensualidad_13: 0.0,
             estatus_code: 2,
             json: null,
             mensaje_det: sanitizeDetalle(data?.detalle ?? data?.status ?? "En progreso"),

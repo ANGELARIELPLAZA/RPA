@@ -29,23 +29,14 @@ function normalizeCotizacion(value) {
         return Number.isFinite(numeric) && numeric === 0;
     }
 
-    // Regla: si la anualidad es 0, ignorar campos relacionados (mes/monto/primer pago).
-    // Mantener `importe_anualidad` para trazabilidad, pero no enviar/usar mes/monto.
-    if (!empty(cotizacion.importe_anualidad) && isZeroLike(cotizacion.importe_anualidad)) {
-        for (const key of [
-            "mes_anualidad",
-            "annuityMonth",
-            "anualidad_cliente",
-            "annuityAmount",
-            "mes_primer_pago",
-            "mesPrimerPago",
-        ]) {
-            if (key in cotizacion) delete cotizacion[key];
-        }
-    }
-
     if (empty(cotizacion.annuityMonth) && !empty(cotizacion.mes_anualidad)) {
         cotizacion.annuityMonth = cotizacion.mes_anualidad;
+    }
+
+    // annuityAmount: por negocio viene de `importe_anualidad` (monto).
+    // Fallback opcional a `anualidad_cliente` por compatibilidad de payloads viejos.
+    if (empty(cotizacion.annuityAmount) && !empty(cotizacion.importe_anualidad)) {
+        cotizacion.annuityAmount = cotizacion.importe_anualidad;
     }
 
     if (empty(cotizacion.annuityAmount) && !empty(cotizacion.anualidad_cliente)) {
@@ -376,6 +367,9 @@ function normalizeFormatoA(body) {
             annuityMonth: body.annuityMonth,
             importe_anualidad: body.importe_anualidad,
             annuityAmount: body.annuityAmount,
+            mes_primer_pago: body.mes_primer_pago,
+            mesPrimerPago: body.mesPrimerPago,
+            anualidad_cliente: body.anualidad_cliente ?? body.anualidadCliente,
         }),
         cliente: normalizeCliente(mergedCliente),
         vehiculo: normalizeVehiculo(body.vehiculo),
