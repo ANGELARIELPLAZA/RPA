@@ -924,6 +924,8 @@ async function etapaRecuperarPrecioVehiculo(popup) {
 ========================= */
 async function etapaCredito(popup, data) {
     const c = data?.credito || {};
+    const nivelDetalle = normalizeString(data?.nivel_detalle ?? data?.nivelDetalle).toLowerCase();
+    const isPlanesDisponibles = nivelDetalle === "planes_disponibles";
 
     // Enganche: usar solo uno (prioridad: porcentaje, luego monto)
     if (!empty(c.creditDepositPercent)) {
@@ -936,13 +938,89 @@ async function etapaCredito(popup, data) {
         await popup.waitForTimeout(1000);
     }
 
-    if (!empty(c.creditDepositPlan)) {
+    // En modo `planes_disponibles` no se selecciona plan: se consulta la lista.
+    if (!isPlanesDisponibles && !empty(c.creditDepositPlan)) {
         await esperarYSeleccionar(popup, "#creditDepositPlan", c.creditDepositPlan);
     }
 
-    if (!empty(c.creditDepositTerm)) {
+    if (!isPlanesDisponibles && !empty(c.creditDepositTerm)) {
         await esperarYSeleccionar(popup, "#creditDepositTerm", c.creditDepositTerm);
     }
+}
+
+/* =========================
+   ETAPA 6.1 - PLANES DISPONIBLES
+========================= */
+async function etapaPlanesDisponibles(popup) {
+    const hooks = popup?.__rpaHooks;
+
+    const waitForSelectOptions = async (selector, { timeout = 60000 } = {}) => {
+        try {
+            await popup.waitForFunction(
+                (sel) => {
+                    const nodes = Array.from(document.querySelectorAll(sel));
+                    const select = nodes.find((n) => n && n.tagName === "SELECT" && !n.disabled);
+                    if (!select) return false;
+                    return (select.options?.length || 0) > 1;
+                },
+                selector,
+                { timeout }
+            );
+            return true;
+        } catch {
+            return false;
+        }
+    };
+
+    const mapOptions = (snap) => {
+        const options = Array.isArray(snap?.options) ? snap.options : [];
+        return options
+            .map((o) => ({
+                value: String(o?.value ?? "").trim(),
+                label: String(o?.label ?? "").trim(),
+                selected: o?.selected === true,
+            }))
+            .filter((o) => o.label);
+    };
+
+    if (hooks?.onProgress) {
+        await hooks.onProgress({ page: popup, message: "Consultando planes disponibles (#creditDepositPlan)" }).catch(() => { });
+    }
+
+    await esperarOverlayCarga(popup, { timeout: 60000 }).catch(() => { });
+
+    await waitForSelectOptions("#creditDepositPlan", { timeout: 60000 });
+    const planLocator = await getBestSelectLocator(popup, "#creditDepositPlan");
+    const planSnap = await snapshotSelect(planLocator);
+    const planes = mapOptions(planSnap);
+
+    const planesFiltrados = planes.filter((p) => {
+        const v = String(p.value || "").trim();
+        const l = String(p.label || "").trim().toLowerCase();
+        if (!v) return false;
+        if (v === "-1") return false;
+        if (l.includes("seleccione")) return false;
+        return true;
+    });
+
+    if (!planesFiltrados.length) {
+        return {
+            estatus_code: 0,
+            nivel_detalle: "planes_disponibles",
+            mensaje_det: "No se encontraron planes disponibles en el portal.",
+            planes: [],
+        };
+    }
+
+    return {
+        estatus_code: 1,
+        nivel_detalle: "planes_disponibles",
+        mensaje_det: `${planesFiltrados.length} planes obtenidos correctamente.`,
+        planes: planesFiltrados.map((p) => ({
+            id: String(p.value || "").trim(),
+            nombre: String(p.label || "").trim(),
+        })),
+    };
 }
 
 /* =========================
@@ -2047,6 +2125,55 @@ function createBadGatewayWatcher(page, getStage) {
 ========================= */
 async function runCetelemFlow(payload, hooks = {}) {
     const data = payload || DEFAULT_DATA;
+
+    const nivelDetalleRaw = normalizeString(data?.nivel_detalle ?? data?.nivelDetalle).toLowerCase();
+    const allowedNivelDetalle = ["seguros", "guardar_cotizacion", "planes_disponibles"];
+    if (!allowedNivelDetalle.includes(nivelDetalleRaw)) {
+        throw new Error(`nivel_detalle no permitido: "${nivelDetalleRaw || "N/A"}"`);
+    }
+
+    function parsePositiveNumber(value) {
+        if (value === undefined || value === null) return null;
+        const raw = String(value).trim();
+        if (!raw) return null;
+        const num = Number(raw.replace(/,/g, ""));
+        if (!Number.isFinite(num)) return null;
+        return num;
+    }
+
+    function validatePlanesDisponiblesInput() {
+        const agencia = String(data?.agencia ?? "").trim();
+        if (!agencia) throw new Error("Falta campo requerido: agencia");
+
+        const v = data?.vehiculo || {};
+        if (empty(v.vehicleType) && empty(v.tipo_vehiculo)) throw new Error("Falta campo requerido: tipo_vehiculo");
+        if (empty(v.insuranceVehicleUse) && empty(v.uso_vehicular)) throw new Error("Falta campo requerido: uso_vehicular");
+        if (empty(v.vehicleBrand) && empty(v.marca)) throw new Error("Falta campo requerido: marca");
+        if (empty(v.vehicleAnio) && empty(v.anio)) throw new Error("Falta campo requerido: anio");
+        if (empty(v.vehicleModel) && empty(v.modelo)) throw new Error("Falta campo requerido: modelo");
+        if (empty(v.vehicleVersion) && empty(v.version)) throw new Error("Falta campo requerido: version");
+
+        const c = data?.credito || {};
+        const percent = parsePositiveNumber(c.creditDepositPercent ?? c.enganche_porcentaje ?? c.enganchePorcentaje);
+        const amount = parsePositiveNumber(c.creditDepositAmount ?? c.enganche_monto ?? c.engancheMonto);
+
+        const hasPercent = percent !== null;
+        const hasAmount = amount !== null;
+        if (!hasPercent && !hasAmount) {
+            throw new Error("Falta campo requerido: enganche_porcentaje o enganche_monto");
+        }
+        if (hasPercent && percent <= 0) throw new Error("Falta campo requerido: enganche_porcentaje (debe ser > 0)");
+        if (hasAmount && amount <= 0) throw new Error("Falta campo requerido: enganche_monto (debe ser > 0)");
+    }
+
+    const isSeguros = nivelDetalleRaw === "seguros";
+    const isPlanesDisponibles = nivelDetalleRaw === "planes_disponibles";
+    const isGuardarCotizacion = nivelDetalleRaw === "guardar_cotizacion";
+
+    if (isPlanesDisponibles) {
+        validatePlanesDisponiblesInput();
+    }
+
     const credentials = resolveCredentialsForAgencia(data?.agencia);
 
     const browser = await BrowserManager.getBrowser();
@@ -2082,10 +2209,7 @@ async function runCetelemFlow(payload, hooks = {}) {
         badGatewayWatcher.dispose();
         badGatewayWatcher = createBadGatewayWatcher(popup, () => currentStage);
 
-        const nivelDetalle = normalizeString(data?.nivel_detalle ?? data?.nivelDetalle).toLowerCase();
-        const isSeguros = nivelDetalle === "seguros";
-        const isGuardarCotizacion = nivelDetalle === "guardar_cotizacion";
-        const skipCliente = isSeguros;
+        const skipCliente = isSeguros || isPlanesDisponibles;
 
         if (!skipCliente && isNonEmptyObject(data?.cliente)) {
             await stage("cliente", async () => etapaCliente(popup, data));
@@ -2104,8 +2228,19 @@ async function runCetelemFlow(payload, hooks = {}) {
             await stage("credito", async () => etapaCredito(popup, data));
         }
 
+        let planesResult = null;
+        if (isPlanesDisponibles) {
+            planesResult = await stage("planes_disponibles", async () => {
+                const result = await etapaPlanesDisponibles(popup);
+                return {
+                    ...result,
+                    request_data: { agencia: normalizeString(data?.agencia) },
+                };
+            });
+        }
+
         let seguroResult = null;
-        if (isSeguros || isNonEmptyObject(data?.seguro)) {
+        if (!isPlanesDisponibles && (isSeguros || isNonEmptyObject(data?.seguro))) {
             seguroResult = await stage("seguro", async () => etapaSeguro(popup, data));
         }
 
@@ -2118,7 +2253,7 @@ async function runCetelemFlow(payload, hooks = {}) {
 
         return {
             ok: true,
-            result: isGuardarCotizacion ? guardarResult : seguroResult,
+            result: isGuardarCotizacion ? guardarResult : (isPlanesDisponibles ? planesResult : seguroResult),
         };
     } catch (error) {
         if (hooks.onErrorScreenshot) {

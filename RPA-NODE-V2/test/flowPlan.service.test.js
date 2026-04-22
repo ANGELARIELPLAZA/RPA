@@ -20,12 +20,12 @@ test("isNonEmptyObject: detecta valores no vacíos", () => {
 test("buildFlowStages: no agrega cliente si viene vacío", () => {
     const payload = {
         nivel_detalle: "planes_disponibles",
-        cliente: { customerType: null, customerName: null },
+        cliente: { customerType: "1", customerName: null },
         vehiculo: { vehicleBrand: "KIA" },
         credito: { creditDepositTerm: "12" },
+        seguro: { insuranceCP: "45640" },
     };
 
     const stages = buildFlowStages(payload).map((s) => s.name);
-    assert.deepEqual(stages, ["login", "vehiculo", "credito", "finalizando"]);
+    assert.deepEqual(stages, ["login", "vehiculo", "credito", "planes_disponibles", "finalizando"]);
 });
-

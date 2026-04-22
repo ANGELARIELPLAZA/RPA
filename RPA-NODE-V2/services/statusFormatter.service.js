@@ -29,6 +29,41 @@ function formatPrima(value) {
 function formatearSalidaCliente(data) {
     const status = String(data?.status ?? "").toLowerCase();
     const nivel_detalle = normalizeNivelDetalle(data?.nivel_detalle ?? data?.nivelDetalle);
+    const isPlanesDisponibles = nivel_detalle === "planes_disponibles";
+
+    if (isPlanesDisponibles) {
+        const result = data?.result && typeof data.result === "object" ? data.result : {};
+        const planes = Array.isArray(result?.planes) ? result.planes : [];
+        const request_data =
+            result?.request_data && typeof result.request_data === "object" ? result.request_data : { agencia: null };
+
+        if (status === "completado") {
+            return {
+                estatus_code: planes.length ? 1 : 0,
+                nivel_detalle: "planes_disponibles",
+                mensaje_det: String(result?.mensaje_det || (planes.length ? `${planes.length} planes obtenidos correctamente.` : "No se encontraron planes disponibles en el portal.")),
+                planes,
+                request_data,
+            };
+        }
+
+        if (status === "fallido") {
+            return {
+                estatus_code: 0,
+                nivel_detalle: "planes_disponibles",
+                mensaje_det: sanitizeDetalle(data?.detalle),
+                planes: [],
+                request_data,
+                data: null,
+            };
+        }
+
+        return {
+            estatus_code: 2,
+            nivel_detalle: "planes_disponibles",
+            mensaje_det: sanitizeDetalle(data?.detalle ?? data?.status ?? "En progreso"),
+        };
+    }
 
     if (nivel_detalle === "guardar_cotizacion") {
         const result = data?.result && typeof data.result === "object" ? data.result : {};

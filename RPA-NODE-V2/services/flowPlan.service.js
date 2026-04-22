@@ -11,13 +11,15 @@ function buildFlowStages(normalizedPayload) {
 
     const nivelDetalle = String(normalizedPayload?.nivel_detalle ?? normalizedPayload?.nivelDetalle ?? "").trim().toLowerCase();
     const isSeguros = nivelDetalle === "seguros";
+    const isPlanesDisponibles = nivelDetalle === "planes_disponibles";
     const isGuardarCotizacion = nivelDetalle === "guardar_cotizacion";
-    const skipCliente = isSeguros;
+    const skipCliente = isSeguros || isPlanesDisponibles;
 
     if (!skipCliente && isNonEmptyObject(normalizedPayload?.cliente)) stages.push({ name: "cliente" });
     if (isNonEmptyObject(normalizedPayload?.vehiculo)) stages.push({ name: "vehiculo" });
     if (isNonEmptyObject(normalizedPayload?.credito)) stages.push({ name: "credito" });
-    if (isSeguros || isNonEmptyObject(normalizedPayload?.seguro)) stages.push({ name: "seguro" });
+    if (isPlanesDisponibles) stages.push({ name: "planes_disponibles" });
+    if (isSeguros || (!isPlanesDisponibles && isNonEmptyObject(normalizedPayload?.seguro))) stages.push({ name: "seguro" });
     if (isGuardarCotizacion) stages.push({ name: "guardar_cotizacion" });
     stages.push({ name: "finalizando" });
 
