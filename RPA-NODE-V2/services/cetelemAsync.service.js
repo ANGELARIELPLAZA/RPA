@@ -255,6 +255,7 @@ async function executeTask(taskId, normalizedPayload, portalMeta) {
     let currentPhaseStartedAt = Date.now();
 
     const stageIndexByName = new Map(stages.map((s, idx) => [s?.name, idx]));
+    let lastPage = null;
 
     taskStore.setStage(taskId, etapaNombre, currentStep, totalSteps);
     trackingClient.updateExecution(taskId, {
@@ -309,6 +310,8 @@ async function executeTask(taskId, normalizedPayload, portalMeta) {
         onProgress: async ({ page, message }) => {
             const msg = String(message || "").trim();
             if (!msg) return;
+
+            if (page) lastPage = page;
 
             const now = Date.now();
             const task = taskStore.getTask(taskId);
@@ -386,6 +389,11 @@ async function executeTask(taskId, normalizedPayload, portalMeta) {
 
         if (!ok) {
             const task = taskStore.getTask(taskId);
+
+            // Fallo de negocio (sin excepción): también capturar screenshot/errores del formulario si hay page disponible.
+            if (!task?.screenshot_url && lastPage) {
+                await hooks.onErrorScreenshot({ page: lastPage }).catch(() => { });
+            }
             const detalle = mergeDetalle(task?.detalle, flowResult?.mensaje_det || "Error: ejecuciÃ³n finalizÃ³ sin Ã©xito");
 
             taskStore.patchTask(taskId, { result: flowResult ?? null });

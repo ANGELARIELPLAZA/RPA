@@ -1404,6 +1404,26 @@ async function etapaGuardarCotizacion(popup, data) {
             const monthValue = normalizeAnnuityMonth(cot.annuityMonth);
             if (monthValue) {
                 await esperarYSeleccionar(popup, "#annuityMonth", monthValue, 60000);
+
+                // Al seleccionar el mes, el portal suele mostrar el rango permitido.
+                // Si ya tenemos un importe a enviar y está fuera del rango, fallar desde aquí con evidencia.
+                const desiredAmountPre = cot.annuityAmount !== undefined && cot.annuityAmount !== null ? String(cot.annuityAmount).replace(/,/g, "").trim() : "";
+                const desiredNumPre = desiredAmountPre ? parseMoneyFromText(desiredAmountPre) : null;
+                if (desiredAmountPre && typeof desiredNumPre === "number") {
+                    const rangeMsgPre = await readAnualidadMaxMinMessage(popup).catch(() => "");
+                    const rangePre = rangeMsgPre ? parseAnualidadRangeFromText(rangeMsgPre) : null;
+                    if (rangeMsgPre && rangePre && (desiredNumPre < rangePre.min || desiredNumPre > rangePre.max)) {
+                        const sentLine = `Anualidad enviada: ${desiredAmountPre || "?"} | Mes anualidad: ${monthValue}`;
+                        const errorMsg = `${rangeMsgPre}\n${sentLine}`;
+                        if (hooks?.onProgress) {
+                            await hooks.onProgress({ page: popup, message: errorMsg }).catch(() => { });
+                        }
+                        if (hooks?.onErrorScreenshot) {
+                            await hooks.onErrorScreenshot({ page: popup }).catch(() => { });
+                        }
+                        throw new Error(errorMsg);
+                    }
+                }
             }
         }
 
@@ -1462,10 +1482,15 @@ async function etapaGuardarCotizacion(popup, data) {
                 const gotResetToZero = typeof afterNum === "number" && afterNum === 0 && desiredNum !== null && desiredNum !== 0;
 
                 if (outOfRange || gotResetToZero) {
+                    const sentLine = `Anualidad enviada: ${desiredAmount || "?"} | Capturada: ${after || "?"}`;
+                    const errorMsg = `${rangeMsg}\n${sentLine}`;
                     if (hooks?.onProgress) {
-                        await hooks.onProgress({ page: popup, message: rangeMsg }).catch(() => { });
+                        await hooks.onProgress({ page: popup, message: errorMsg }).catch(() => { });
                     }
-                    throw new Error(rangeMsg);
+                    if (hooks?.onErrorScreenshot) {
+                        await hooks.onErrorScreenshot({ page: popup }).catch(() => { });
+                    }
+                    throw new Error(errorMsg);
                 }
             }
         }
@@ -1481,11 +1506,22 @@ async function etapaGuardarCotizacion(popup, data) {
     const saveData = {
         folio: "",
         mensualidad_1: 0.0,
+        mensualidad_13: 0.0,
         backend: null,
+        request_seen: false,
+        http_status: null,
+        content_type: "",
+        body_snippet: "",
+        parse_error: "",
     };
 
     const routeHandler = async (route) => {
         const response = await route.fetch();
+
+        saveData.request_seen = true;
+        saveData.http_status = typeof response?.status === "function" ? response.status() : null;
+        const headers = typeof response?.headers === "function" ? response.headers() : {};
+        saveData.content_type = String(headers?.["content-type"] || headers?.["Content-Type"] || "").trim();
 
         try {
             const jsonData = await response.json().catch(() => null);
@@ -1509,9 +1545,18 @@ async function etapaGuardarCotizacion(popup, data) {
                 saveData.mensualidad_1 = Number(mensualidad_1_Raw) || 0.0;
                 saveData.mensualidad_13 = Number(mensualidad_13_Raw) || 0.0;
                 saveData.backend = jsonData;
+                saveData.body_snippet = "";
+                saveData.parse_error = "";
             }
         } catch {
-            // noop
+            try {
+                const text = await response.text().catch(() => "");
+                const normalized = String(text || "").replace(/\s+/g, " ").trim();
+                saveData.body_snippet = normalized ? `${normalized.slice(0, 600)}${normalized.length > 600 ? "…" : ""}` : "";
+                saveData.parse_error = "no_json_response";
+            } catch {
+                saveData.parse_error = "read_response_failed";
+            }
         }
 
         await route.fulfill({ response });
@@ -1530,6 +1575,11 @@ async function etapaGuardarCotizacion(popup, data) {
             saveData.mensualidad_1 = 0.0;
             saveData.mensualidad_13 = 0.0;
             saveData.backend = null;
+            saveData.request_seen = false;
+            saveData.http_status = null;
+            saveData.content_type = "";
+            saveData.body_snippet = "";
+            saveData.parse_error = "";
 
             if (hooks?.onProgress) {
                 await hooks.onProgress({
@@ -1629,11 +1679,45 @@ async function etapaGuardarCotizacion(popup, data) {
             ? { minimo: parsedRangeNow.min, maximo: parsedRangeNow.max }
             : null;
 
+        const guardarPopupText = await popup
+            .evaluate(() => {
+                const normalize = (s) => String(s || "").replace(/\s+/g, " ").trim();
+                const visible = (el) => {
+                    if (!el) return false;
+                    const style = window.getComputedStyle(el);
+                    return style && style.display !== "none" && style.visibility !== "hidden" && style.opacity !== "0";
+                };
+
+                const bodies = Array.from(document.querySelectorAll(".messager-body, .window-body, .panel-body"))
+                    .filter((el) => visible(el))
+                    .map((el) => normalize(el.innerText || el.textContent))
+                    .filter(Boolean);
+
+                return bodies.join(" | ");
+            })
+            .catch(() => "");
+
         const extra = [];
         if (rangeMsgNow) extra.push(`Rango anualidad: ${rangeMsgNow}`);
         if (formErrorNow) extra.push(`FormError: ${formErrorNow}${formErrorFieldNow ? ` (campo: ${formErrorFieldNow})` : ""}`);
+        if (saveData.request_seen) {
+            extra.push(
+                `save: status=${saveData.http_status ?? "?"} content-type="${saveData.content_type || "?"}"${saveData.parse_error ? ` parse=${saveData.parse_error}` : ""}`
+            );
+            if (saveData.body_snippet) extra.push(`save.body: ${saveData.body_snippet}`);
+        } else {
+            extra.push("save: no_request_intercepted (no llego **/cotizacion/save o no match)");
+        }
+        if (guardarPopupText) {
+            extra.push(`popup: ${String(guardarPopupText).slice(0, 600)}${String(guardarPopupText).length > 600 ? "…" : ""}`);
+        }
 
         const msg = extra.length ? `${baseMsg}\n${extra.join("\n")}` : baseMsg;
+
+        // Genera evidencia para fallos de negocio (no necesariamente lanza excepción)
+        if (hooks?.onErrorScreenshot) {
+            await hooks.onErrorScreenshot({ page: popup }).catch(() => { });
+        }
 
         if (hooks?.onProgress) {
             await hooks.onProgress({

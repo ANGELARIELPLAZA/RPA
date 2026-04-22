@@ -23,7 +23,7 @@ services:
     environment:
       - PORT=3100
       - NODE_ENV=production
-      - MONGO_URI=mongodb://${MONGO_APP_USERNAME:?}:${MONGO_APP_PASSWORD:?}@mongo:27017/${MONGO_APP_DB:-rpa_tracking}
+      - MONGO_URI=mongodb://${MONGO_APP_USERNAME:?}:${MONGO_APP_PASSWORD:?}@mongo:27017/${MONGO_APP_DB:-rpa_tracking}?authSource=${MONGO_APP_DB:-rpa_tracking}
       - SERVICE_NAME=rpa-tracking-service
       - REQUEST_TIMEOUT_MS=3000
       - LOG_TO_FILE=true

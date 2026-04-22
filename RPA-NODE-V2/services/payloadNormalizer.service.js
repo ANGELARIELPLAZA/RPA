@@ -49,6 +49,17 @@ function normalizeCotizacion(value) {
         }
     }
 
+    // Evitar duplicidad: una vez mapeados a campos canónicos, remover aliases del payload.
+    if (!empty(cotizacion.annuityMonth)) {
+        delete cotizacion.mes_anualidad;
+    }
+
+    if (!empty(cotizacion.annuityAmount)) {
+        delete cotizacion.importe_anualidad;
+        delete cotizacion.anualidad_cliente;
+        delete cotizacion.anualidadCliente;
+    }
+
     return cotizacion;
 }
 

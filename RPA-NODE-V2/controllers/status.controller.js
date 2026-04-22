@@ -58,6 +58,7 @@ function getStatus(req, res) {
         return res.json({
             status: "completed",
             ...client,
+            screenshot_url: tech?.screenshot_url || null,
         });
     }
 
