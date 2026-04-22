@@ -6,6 +6,7 @@ const { URL } = require("url");
 let cache = null;
 let cacheAt = 0;
 const CACHE_TTL_MS = 10_000;
+let refreshPromise = null;
 
 function isTransientNetworkError(code) {
     return ["ETIMEDOUT", "ECONNREFUSED", "ECONNRESET", "EAI_AGAIN", "ENOTFOUND"].includes(String(code || ""));
@@ -104,15 +105,33 @@ async function pingPortal(options = {}) {
     }
 }
 
+async function refreshCache(options = {}) {
+    try {
+        const next = await pingPortal(options);
+        cache = next;
+        cacheAt = Date.now();
+        return next;
+    } finally {
+        refreshPromise = null;
+    }
+}
+
 async function getPortalStatusCached(options = {}) {
     const now = Date.now();
     if (cache && now - cacheAt < CACHE_TTL_MS) {
         return cache;
     }
 
-    cache = await pingPortal(options);
-    cacheAt = now;
-    return cache;
+    // Stale-while-revalidate: si ya tenemos cache (aunque esté vencido),
+    // devolvemos inmediatamente y refrescamos en background para no bloquear /health.
+    if (cache) {
+        if (!refreshPromise) refreshPromise = refreshCache(options);
+        return cache;
+    }
+
+    // Primer fetch: intenta refrescar, pero evita que múltiples requests hagan ping duplicado.
+    if (!refreshPromise) refreshPromise = refreshCache(options);
+    return refreshPromise;
 }
 
 module.exports = {
