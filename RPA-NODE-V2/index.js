@@ -1313,6 +1313,38 @@ async function clickGuardarCotizacion(popup) {
     return true;
 }
 
+async function readFolioFromGuardadoPopup(page) {
+    try {
+        const text = await page.evaluate(() => {
+            const normalize = (s) => String(s || "").replace(/\s+/g, " ").trim();
+            const visible = (el) => {
+                if (!el) return false;
+                const style = window.getComputedStyle(el);
+                return style && style.display !== "none" && style.visibility !== "hidden" && style.opacity !== "0";
+            };
+
+            const bodies = Array.from(document.querySelectorAll(".messager-body, .window-body, .panel-body"))
+                .filter((el) => visible(el))
+                .map((el) => normalize(el.innerText || el.textContent))
+                .filter(Boolean);
+
+            return bodies.join(" | ");
+        });
+
+        const raw = String(text || "");
+        if (!raw) return "";
+
+        const m =
+            raw.match(/cotizaci[oó]n\s+guardada\s+exitosamente\s+(\d+)/i) ||
+            raw.match(/guardada\s+exitosamente\s+(\d+)/i) ||
+            raw.match(/exitosamente\s+(\d+)/i);
+
+        return m ? String(m[1] || "").trim() : "";
+    } catch {
+        return "";
+    }
+}
+
 async function etapaGuardarCotizacion(popup, data) {
     const hooks = popup?.__rpaHooks;
 
@@ -1525,10 +1557,31 @@ async function etapaGuardarCotizacion(popup, data) {
                 };
             }
 
+            let gotFolioFromPopup = false;
             let waitedMs = 0;
             while (waitedMs < maxWaitSeconds * 1000 && empty(saveData.folio)) {
                 await popup.waitForTimeout(waitIntervalMs);
                 waitedMs += waitIntervalMs;
+
+                if (empty(saveData.folio)) {
+                    const folioPopup = await readFolioFromGuardadoPopup(popup).catch(() => "");
+                    if (folioPopup) {
+                        saveData.folio = normalizeString(folioPopup);
+                        gotFolioFromPopup = true;
+                    }
+                }
+            }
+
+            if (gotFolioFromPopup && normalizeString(saveData.folio) && !saveData.backend) {
+                // El portal puede mostrar el popup antes de que llegue (o se procese) el JSON de /cotizacion/save.
+                // Si ya tenemos folio por UI, espera más para capturar backendJson (mensualidades, etc.).
+                const extraBackendWaitSeconds = 20;
+                const extraBackendWaitIntervalMs = 250;
+                let extraWaitMs = 0;
+                while (extraWaitMs < extraBackendWaitSeconds * 1000 && !saveData.backend) {
+                    await popup.waitForTimeout(extraBackendWaitIntervalMs);
+                    extraWaitMs += extraBackendWaitIntervalMs;
+                }
             }
 
             folio = normalizeString(saveData.folio) || null;

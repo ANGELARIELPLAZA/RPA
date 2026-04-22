@@ -42,7 +42,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (service) (count_over_time({service=~\"$service\", level=~\"$level\"}[1m]))"
+          "expr": "sum by (service) (count_over_time({service=~\"$service\", level=~\"(?i)$level\"}[1m]))"
         }
       ],
       "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] }
@@ -52,7 +52,7 @@
       "title": "Logs",
       "datasource": { "type": "loki", "uid": "loki" },
       "gridPos": { "x": 0, "y": 6, "w": 24, "h": 14 },
-      "targets": [{ "refId": "A", "expr": "{service=~\"$service\", level=~\"$level\"}" }],
+      "targets": [{ "refId": "A", "expr": "{service=~\"$service\", level=~\"(?i)$level\"}" }],
       "options": { "showLabels": true, "wrapLogMessage": true, "sortOrder": "Descending" }
     }
   ]

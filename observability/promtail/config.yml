@@ -23,9 +23,9 @@ scrape_configs:
             level: level
             severity: severity
       - regex:
-          expression: '(?i)\\b(level|lvl|severity)=?(?P<level>trace|debug|info|warn|warning|error|fatal)\\b'
+          expression: '(?i)\b(level|lvl|severity)=?(?P<level>trace|debug|info|warn|warning|error|fatal)\b'
       - regex:
-          expression: '(?i)\\b(?P<level>trace|debug|info|warn|warning|error|fatal)\\b'
+          expression: '(?i)\b(?P<level>trace|debug|info|warn|warning|error|fatal)\b'
       - labels:
           level:
 
@@ -43,9 +43,8 @@ scrape_configs:
             level: level
             severity: severity
       - regex:
-          expression: '(?i)\\b(level|lvl|severity)=?(?P<level>trace|debug|info|warn|warning|error|fatal)\\b'
+          expression: '(?i)\b(level|lvl|severity)=?(?P<level>trace|debug|info|warn|warning|error|fatal)\b'
       - regex:
-          expression: '(?i)\\b(?P<level>trace|debug|info|warn|warning|error|fatal)\\b'
+          expression: '(?i)\b(?P<level>trace|debug|info|warn|warning|error|fatal)\b'
       - labels:
           level:
-
