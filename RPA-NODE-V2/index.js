@@ -1,6 +1,7 @@
 const BrowserManager = require("./core/browser-manager");
 const { CETELEM_URL, MAX_REINTENTOS, resolveCredentialsForAgencia } = require("./config");
 const logger = require("./core/logger");
+const { isNonEmptyObject } = require("./services/flowPlan.service");
 
 const DEFAULT_DATA = {
     cliente: {
@@ -1141,6 +1142,34 @@ async function readAnualidadMaxMinMessage(page) {
     }
 }
 
+async function readVisibleValidationPrompts(page) {
+    if (!page) return [];
+
+    try {
+        const prompts = await page.evaluate(() => {
+            const normalize = (s) => String(s || "").replace(/\s+/g, " ").trim();
+            const isVisible = (el) => {
+                if (!el) return false;
+                const style = window.getComputedStyle(el);
+                if (!style) return false;
+                if (style.display === "none" || style.visibility === "hidden" || style.opacity === "0") return false;
+                const rect = el.getBoundingClientRect?.();
+                if (!rect) return true;
+                return rect.width > 0 && rect.height > 0;
+            };
+
+            return Array.from(document.querySelectorAll(".formErrorContent, .formError .formErrorContent"))
+                .filter((el) => isVisible(el))
+                .map((el) => normalize(el?.innerText || el?.textContent))
+                .filter(Boolean);
+        });
+
+        return Array.isArray(prompts) ? prompts : [];
+    } catch {
+        return [];
+    }
+}
+
 async function readFormErrorSnapshot(page) {
     if (!page) return { content: "", field: "" };
 
@@ -1189,6 +1218,7 @@ async function readFormErrorSnapshot(page) {
 
             let content = "";
             for (const el of candidates) {
+                if (!isVisible(el)) continue;
                 const t = pickText(el);
                 if (t) { content = t; break; }
             }
@@ -1414,7 +1444,9 @@ async function etapaGuardarCotizacion(popup, data) {
                     const rangePre = rangeMsgPre ? parseAnualidadRangeFromText(rangeMsgPre) : null;
                     if (rangeMsgPre && rangePre && (desiredNumPre < rangePre.min || desiredNumPre > rangePre.max)) {
                         const sentLine = `Anualidad enviada: ${desiredAmountPre || "?"} | Mes anualidad: ${monthValue}`;
-                        const errorMsg = `${rangeMsgPre}\n${sentLine}`;
+                        const prompts = await readVisibleValidationPrompts(popup).catch(() => []);
+                        const promptLine = Array.isArray(prompts) && prompts.length ? `Validación: ${prompts.join(" | ")}` : "";
+                        const errorMsg = `${rangeMsgPre}\n${sentLine}${promptLine ? `\n${promptLine}` : ""}`;
                         if (hooks?.onProgress) {
                             await hooks.onProgress({ page: popup, message: errorMsg }).catch(() => { });
                         }
@@ -1483,7 +1515,9 @@ async function etapaGuardarCotizacion(popup, data) {
 
                 if (outOfRange || gotResetToZero) {
                     const sentLine = `Anualidad enviada: ${desiredAmount || "?"} | Capturada: ${after || "?"}`;
-                    const errorMsg = `${rangeMsg}\n${sentLine}`;
+                    const prompts = await readVisibleValidationPrompts(popup).catch(() => []);
+                    const promptLine = Array.isArray(prompts) && prompts.length ? `Validación: ${prompts.join(" | ")}` : "";
+                    const errorMsg = `${rangeMsg}\n${sentLine}${promptLine ? `\n${promptLine}` : ""}`;
                     if (hooks?.onProgress) {
                         await hooks.onProgress({ page: popup, message: errorMsg }).catch(() => { });
                     }
@@ -1562,7 +1596,8 @@ async function etapaGuardarCotizacion(popup, data) {
         await route.fulfill({ response });
     };
 
-    await popup.route("**/cotizacion/save", routeHandler);
+    // Algunos entornos agregan querystring; el glob con sufijo `**` lo cubre.
+    await popup.route("**/cotizacion/save**", routeHandler);
 
     let folio = null;
     let mensualidad_1 = 0.0;
@@ -1649,7 +1684,7 @@ async function etapaGuardarCotizacion(popup, data) {
             }
         }
     } finally {
-        await popup.unroute("**/cotizacion/save", routeHandler).catch(() => { });
+        await popup.unroute("**/cotizacion/save**", routeHandler).catch(() => { });
     }
 
     const rfc =
@@ -2052,11 +2087,11 @@ async function runCetelemFlow(payload, hooks = {}) {
         const isGuardarCotizacion = nivelDetalle === "guardar_cotizacion";
         const skipCliente = isSeguros;
 
-        if (!skipCliente && data?.cliente && Object.keys(data.cliente).length) {
+        if (!skipCliente && isNonEmptyObject(data?.cliente)) {
             await stage("cliente", async () => etapaCliente(popup, data));
         }
 
-        if (data?.vehiculo && Object.keys(data.vehiculo).length) {
+        if (isNonEmptyObject(data?.vehiculo)) {
             await stage("vehiculo", async () => {
                 await etapaVehiculo(popup, data);
                 await etapaRecuperarPrecioVehiculo(popup);
@@ -2065,12 +2100,12 @@ async function runCetelemFlow(payload, hooks = {}) {
 
         // En algunos casos, el portal habilita campos de seguro (como CP) solo después de definir crédito.
         // Por eso, en modo "seguros" no se omite crédito si viene payload.
-        if (data?.credito && Object.keys(data.credito).length) {
+        if (isNonEmptyObject(data?.credito)) {
             await stage("credito", async () => etapaCredito(popup, data));
         }
 
         let seguroResult = null;
-        if (isSeguros || (data?.seguro && Object.keys(data.seguro).length)) {
+        if (isSeguros || isNonEmptyObject(data?.seguro)) {
             seguroResult = await stage("seguro", async () => etapaSeguro(popup, data));
         }
 

@@ -34,6 +34,9 @@ function formatearSalidaCliente(data) {
         const result = data?.result && typeof data.result === "object" ? data.result : {};
         const form_error_content = String(result?.form_error_content ?? data?.form_error_content ?? "").trim() || null;
         const form_error_field = String(result?.form_error_field ?? data?.form_error_field ?? "").trim() || null;
+        const form_errors = Array.isArray(result?.form_errors)
+            ? result.form_errors
+            : (Array.isArray(data?.form_errors) ? data.form_errors : null);
         const anualidad_range_message = String(result?.anualidad_range_message ?? "").trim() || null;
         const rango_anualidad_raw =
             result?.rango_anualidad && typeof result.rango_anualidad === "object" ? result.rango_anualidad : null;
@@ -61,6 +64,7 @@ function formatearSalidaCliente(data) {
                 mensaje_det: String(result?.mensaje_det ?? (result?.folio ? "EXITOSO" : "Error")),
                 ...(form_error_content ? { form_error_content } : {}),
                 ...(form_error_field ? { form_error_field } : {}),
+                ...(Array.isArray(form_errors) && form_errors.length ? { form_errors } : {}),
                 ...(anualidad_range_message ? { anualidad_range_message } : {}),
                 ...(rango_anualidad ? { rango_anualidad } : {}),
                 phase_durations,
@@ -78,6 +82,7 @@ function formatearSalidaCliente(data) {
                 mensaje_det: sanitizeDetalle(data?.detalle),
                 ...(form_error_content ? { form_error_content } : {}),
                 ...(form_error_field ? { form_error_field } : {}),
+                ...(Array.isArray(form_errors) && form_errors.length ? { form_errors } : {}),
                 ...(anualidad_range_message ? { anualidad_range_message } : {}),
                 ...(rango_anualidad ? { rango_anualidad } : {}),
                 phase_durations,
@@ -94,6 +99,7 @@ function formatearSalidaCliente(data) {
             mensaje_det: sanitizeDetalle(data?.detalle ?? data?.status ?? "En progreso"),
             ...(form_error_content ? { form_error_content } : {}),
             ...(form_error_field ? { form_error_field } : {}),
+            ...(Array.isArray(form_errors) && form_errors.length ? { form_errors } : {}),
             ...(anualidad_range_message ? { anualidad_range_message } : {}),
             ...(rango_anualidad ? { rango_anualidad } : {}),
             phase_durations,

@@ -26,4 +26,5 @@ function buildFlowStages(normalizedPayload) {
 
 module.exports = {
     buildFlowStages,
+    isNonEmptyObject,
 };

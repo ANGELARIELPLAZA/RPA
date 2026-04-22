@@ -105,6 +105,7 @@ function toPublicStatus(task, { includePayload = false, includeScreenshotBase64 
         ...(task.screenshot_url ? { screenshot_url: task.screenshot_url } : {}),
         ...(task.form_error_content ? { form_error_content: task.form_error_content } : {}),
         ...(task.form_error_field ? { form_error_field: task.form_error_field } : {}),
+        ...(Array.isArray(task.form_errors) && task.form_errors.length ? { form_errors: task.form_errors } : {}),
         ...(task.phase_durations && typeof task.phase_durations === "object" ? { phase_durations: task.phase_durations } : {}),
         ...(screenshotBase64 ? { screenshot: { base64: screenshotBase64 } } : {}),
         ...(includePayload
@@ -135,6 +136,7 @@ function createTask({ task_id, fecha_ejecucion, payload_original, payload_normal
         screenshot_url: null,
         form_error_content: null,
         form_error_field: null,
+        form_errors: [],
         phase_durations: {},
     };
 

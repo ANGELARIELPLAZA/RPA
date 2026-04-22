@@ -46,9 +46,12 @@ function getStatus(req, res) {
 
     const s = String(task.status || "").toLowerCase();
     if (s === "fallido") {
+        const fullMsg = String(client?.mensaje_det || tech?.detalle || "Error");
+        const firstLine = fullMsg.split("\n")[0].trim();
         return res.json({
             status: "failed",
-            error_message: client?.mensaje_det || tech?.detalle || "Error",
+            // `error_message` se mantiene por compatibilidad; dejarlo corto para evitar duplicar `mensaje_det` completo.
+            error_message: firstLine || fullMsg,
             ...client,
             screenshot_url: tech?.screenshot_url || null,
         });

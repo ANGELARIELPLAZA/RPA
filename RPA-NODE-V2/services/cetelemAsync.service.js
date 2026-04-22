@@ -234,6 +234,90 @@ async function readFormErrorSnapshot(page) {
     }
 }
 
+async function readVisibleFormErrorsSnapshot(page) {
+    if (!page) return { errors: [], content: "", field: "" };
+
+    try {
+        const snap = await page.evaluate(() => {
+            const normalize = (s) => String(s || "").replace(/\s+/g, " ").trim();
+
+            const isVisible = (el) => {
+                if (!el) return false;
+                const style = window.getComputedStyle(el);
+                if (!style) return false;
+                if (style.display === "none" || style.visibility === "hidden" || style.opacity === "0") return false;
+                const rect = el.getBoundingClientRect?.();
+                if (!rect) return true;
+                return rect.width > 0 && rect.height > 0;
+            };
+
+            const pickText = (el) => normalize(el?.innerText || el?.textContent);
+
+            const getLabelForInput = (input) => {
+                if (!input) return "";
+                const id = input.getAttribute?.("id");
+                if (id && window.CSS && CSS.escape) {
+                    const l = document.querySelector(`label[for="${CSS.escape(id)}"]`);
+                    const t = pickText(l);
+                    if (t) return t;
+                }
+                const wrapLabel = input.closest("label");
+                const wt = pickText(wrapLabel);
+                if (wt) return wt;
+
+                const group = input.closest(".form-group") || input.closest(".field") || input.closest("td") || input.closest("tr");
+                if (group) {
+                    const lab = group.querySelector("label");
+                    const t = pickText(lab);
+                    if (t) return t;
+                }
+                return "";
+            };
+
+            const errors = [];
+
+            // Tooltips de validación (p.ej. jQuery ValidationEngine)
+            const promptEls = Array.from(document.querySelectorAll(".formErrorContent, .formError .formErrorContent"))
+                .filter((el) => isVisible(el));
+
+            for (const el of promptEls) {
+                const msg = pickText(el);
+                if (!msg) continue;
+
+                const formError = el.closest(".formError");
+                const formErrorId = String(formError?.getAttribute?.("id") || "");
+                const m = formErrorId.match(/^(.+?)formError$/i);
+                const fieldId = m ? m[1] : "";
+                const input = fieldId ? document.getElementById(fieldId) : null;
+                const label = getLabelForInput(input);
+                const field = label
+                    ? `${label}${fieldId ? ` (#${fieldId})` : ""}`
+                    : (fieldId ? `#${fieldId}` : "");
+
+                errors.push({ content: msg, field });
+            }
+
+            // Modales del portal visibles
+            const modal = document.querySelector(".messager-body");
+            const modalText = isVisible(modal) ? pickText(modal) : "";
+            if (modalText) errors.push({ content: modalText, field: "" });
+
+            return {
+                errors,
+                content: errors.map((e) => e.content).filter(Boolean).join(" | "),
+                field: errors.map((e) => e.field).filter(Boolean)[0] || "",
+            };
+        });
+
+        const errors = Array.isArray(snap?.errors) ? snap.errors : [];
+        const content = String(snap?.content || "").trim();
+        const field = String(snap?.field || "").trim();
+        return { errors, content, field };
+    } catch {
+        return { errors: [], content: "", field: "" };
+    }
+}
+
 async function executeTask(taskId, normalizedPayload, portalMeta) {
     taskStore.markStarted(taskId);
     trackingClient.updateExecution(taskId, { started_at: new Date().toISOString() });
@@ -349,21 +433,30 @@ async function executeTask(taskId, normalizedPayload, portalMeta) {
                 });
             }
 
-            const formSnap = await readFormErrorSnapshot(page);
-            const formError = formSnap?.content || "";
-            if (formError) {
-                taskStore.patchTask(taskId, {
-                    form_error_content: formError,
-                    form_error_field: formSnap?.field || null,
-                });
-                const fieldSuffix = formSnap?.field ? ` (campo: ${formSnap.field})` : "";
-                trackingClient.updateExecution(taskId, { detalle: `FormError: ${formError}${fieldSuffix}` });
+            const formSnap = await readVisibleFormErrorsSnapshot(page);
+            const errors = Array.isArray(formSnap?.errors) ? formSnap.errors : [];
+            const content = String(formSnap?.content || "").trim();
+            const field = String(formSnap?.field || "").trim();
+
+            // Siempre sobrescribir/limpiar para evitar "arrastrar" errores ya resueltos.
+            taskStore.patchTask(taskId, {
+                form_errors: errors,
+                form_error_content: content || null,
+                form_error_field: field || null,
+            });
+            trackingClient.updateExecution(taskId, {
+                form_errors: errors,
+                form_error_content: content || null,
+                form_error_field: field || null,
+            });
+
+            if (content) {
                 trackingClient.createEvent({
                     task_id: taskId,
                     event_type: "form_error",
                     etapa_nombre: etapaNombre,
                     etapa_numero: `${currentStep}/${totalSteps}`,
-                    message: formSnap?.field ? `${formError} (campo: ${formSnap.field})` : formError,
+                    message: field ? `${content} (campo: ${field})` : content,
                     level: "warn",
                     timestamp: new Date().toISOString(),
                     meta: {},
