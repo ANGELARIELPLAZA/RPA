@@ -331,6 +331,17 @@ function pick(obj, keys) {
 }
 
 function normalizeFormatoA(body) {
+    const cotizacionKeys = [
+        "mes_anualidad",
+        "annuityMonth",
+        "importe_anualidad",
+        "annuityAmount",
+        "mes_primer_pago",
+        "mesPrimerPago",
+        "anualidad_cliente",
+        "anualidadCliente",
+    ];
+
     const clienteKeys = [
         "tipo_persona",
         "customerType",
@@ -361,20 +372,17 @@ function normalizeFormatoA(body) {
         ...(isObject(body.cliente) ? body.cliente : {}),
     };
 
+    const mergedCotizacion = {
+        ...pick(body, cotizacionKeys),
+        ...(isObject(body.cotizacion) ? body.cotizacion : {}),
+    };
+
     return {
         agencia: normalizeAgencia(body.agencia ?? body.agency),
         ...(body.nivel_detalle !== undefined || body.nivelDetalle !== undefined
             ? { nivel_detalle: normalizeNivelDetalle(body.nivel_detalle ?? body.nivelDetalle) }
             : {}),
-        cotizacion: normalizeCotizacion({
-            mes_anualidad: body.mes_anualidad,
-            annuityMonth: body.annuityMonth,
-            importe_anualidad: body.importe_anualidad,
-            annuityAmount: body.annuityAmount,
-            mes_primer_pago: body.mes_primer_pago,
-            mesPrimerPago: body.mesPrimerPago,
-            anualidad_cliente: body.anualidad_cliente ?? body.anualidadCliente,
-        }),
+        cotizacion: normalizeCotizacion(mergedCotizacion),
         cliente: normalizeCliente(mergedCliente),
         vehiculo: normalizeVehiculo(body.vehiculo),
         credito: normalizeCredito(body.credito),

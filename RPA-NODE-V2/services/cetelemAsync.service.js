@@ -11,6 +11,45 @@ const { runCetelemFlowWithRetries } = require("../index");
 
 let lastRobotError = null;
 
+function normalizeNivelDetalle(payload) {
+    const raw = String(payload?.nivel_detalle ?? payload?.nivelDetalle ?? "").trim().toLowerCase();
+    return raw;
+}
+
+function isSuccessfulFlowResult(payload, flowResult) {
+    const nivelDetalle = normalizeNivelDetalle(payload);
+    const result = flowResult && typeof flowResult === "object" ? flowResult : null;
+
+    // Reglas de negocio: en modo "seguros" esperamos al menos 1 prima > 0.
+    if (nivelDetalle === "seguros" && Array.isArray(flowResult)) {
+        return flowResult.length > 0;
+    }
+
+    const estatus = result ? Number(result.estatus_code) : NaN;
+    const hasEstatus = Number.isFinite(estatus);
+
+    // Si el flow devuelve estatus_code, 1 = Ã©xito; cualquier otro valor es fallo.
+    if (hasEstatus) return estatus === 1;
+
+    // Reglas de negocio: guardar_cotizacion requiere folio.
+    if (nivelDetalle === "guardar_cotizacion") {
+        const folio = String(result?.folio ?? "").trim();
+        return Boolean(folio);
+    }
+
+    // Si no hay seÃ±al de estatus, asumir Ã©xito (compatibilidad).
+    return true;
+}
+
+function mergeDetalle(currentDetalle, extraDetalle) {
+    const a = String(currentDetalle ?? "").trim();
+    const b = String(extraDetalle ?? "").trim();
+    if (!a) return b;
+    if (!b) return a;
+    if (a.includes(b)) return a;
+    return `${a}\n${b}`;
+}
+
 function isCetelemIntermitenteClickTimeout(errorMessage) {
     const m = String(errorMessage || "");
     if (!m) return false;
@@ -60,6 +99,141 @@ function setRobotError(error) {
         : null;
 }
 
+async function readFormErrorContent(page) {
+    if (!page) return "";
+
+    try {
+        const text = await page.evaluate(() => {
+            const candidates = [
+                document.querySelector("#formErrorContent"),
+                document.querySelector(".formErrorContent"),
+            ].filter(Boolean);
+
+            const normalize = (s) => String(s || "").replace(/\s+/g, " ").trim();
+
+            for (const el of candidates) {
+                const t = normalize(el?.innerText || el?.textContent);
+                if (t) return t;
+            }
+
+            // Fallback: algunos portales muestran errores en modales.
+            const modal = document.querySelector(".messager-body");
+            const modalText = normalize(modal?.innerText || modal?.textContent);
+            if (modalText) return modalText;
+
+            return "";
+        });
+
+        const trimmed = String(text || "").trim();
+        if (!trimmed) return "";
+        return trimmed.length > 800 ? `${trimmed.slice(0, 799)}…` : trimmed;
+    } catch {
+        return "";
+    }
+}
+
+async function readFormErrorSnapshot(page) {
+    if (!page) return { content: "", field: "" };
+
+    try {
+        const snap = await page.evaluate(() => {
+            const normalize = (s) => String(s || "").replace(/\s+/g, " ").trim();
+
+            const isVisible = (el) => {
+                if (!el) return false;
+                const style = window.getComputedStyle(el);
+                if (!style) return false;
+                if (style.display === "none" || style.visibility === "hidden" || style.opacity === "0") return false;
+                const rect = el.getBoundingClientRect?.();
+                if (!rect) return true;
+                return rect.width > 0 && rect.height > 0;
+            };
+
+            const pickText = (el) => normalize(el?.innerText || el?.textContent);
+
+            const getLabelForInput = (input) => {
+                if (!input) return "";
+                const id = input.getAttribute?.("id");
+                if (id && window.CSS && CSS.escape) {
+                    const l = document.querySelector(`label[for="${CSS.escape(id)}"]`);
+                    const t = pickText(l);
+                    if (t) return t;
+                }
+                const wrapLabel = input.closest("label");
+                const wt = pickText(wrapLabel);
+                if (wt) return wt;
+
+                const group = input.closest(".form-group") || input.closest(".field") || input.closest("td") || input.closest("tr");
+                if (group) {
+                    const lab = group.querySelector("label");
+                    const t = pickText(lab);
+                    if (t) return t;
+                }
+                return "";
+            };
+
+            const candidates = [
+                document.querySelector("#formErrorContent"),
+                document.querySelector(".formErrorContent"),
+            ].filter(Boolean);
+
+            let content = "";
+            for (const el of candidates) {
+                const t = pickText(el);
+                if (t) { content = t; break; }
+            }
+
+            if (!content) {
+                const modal = document.querySelector(".messager-body");
+                const modalText = pickText(modal);
+                if (modalText) content = modalText;
+            }
+
+            if (!content) return { content: "", field: "" };
+
+            const needle = "por favor seleccione";
+            const errorEls = Array.from(document.querySelectorAll("div,span,small,p,li"))
+                .filter((el) => isVisible(el))
+                .map((el) => ({ el, t: pickText(el) }))
+                .filter((x) => x.t && x.t.toLowerCase().includes(needle));
+
+            for (const { el } of errorEls) {
+                const scope = el.closest(".form-group") || el.closest(".field") || el.closest("td") || el.closest("tr") || el.parentElement;
+                const input = scope?.querySelector?.("select, input, textarea");
+                const label = getLabelForInput(input);
+                const id = input?.getAttribute?.("id") || "";
+                if (label || id) {
+                    return { content, field: label ? `${label}${id ? ` (#${id})` : ""}` : (id ? `#${id}` : "") };
+                }
+            }
+
+            const invalid = Array.from(document.querySelectorAll("select, input, textarea"))
+                .filter((el) => isVisible(el))
+                .filter((el) => {
+                    const aria = String(el.getAttribute?.("aria-invalid") || "").toLowerCase() === "true";
+                    const cls = String(el.className || "").toLowerCase();
+                    return aria || cls.includes("invalid") || cls.includes("error");
+                })[0];
+
+            if (invalid) {
+                const label = getLabelForInput(invalid);
+                const id = invalid.getAttribute?.("id") || "";
+                return { content, field: label ? `${label}${id ? ` (#${id})` : ""}` : (id ? `#${id}` : "") };
+            }
+
+            return { content, field: "" };
+        });
+
+        const content = String(snap?.content || "").trim();
+        const field = String(snap?.field || "").trim();
+        if (!content) return { content: "", field: "" };
+        const clipped = content.length > 800 ? `${content.slice(0, 799)}â€¦` : content;
+        return { content: clipped, field };
+    } catch {
+        return { content: "", field: "" };
+    }
+}
+
 async function executeTask(taskId, normalizedPayload, portalMeta) {
     taskStore.markStarted(taskId);
     trackingClient.updateExecution(taskId, { started_at: new Date().toISOString() });
@@ -76,6 +250,9 @@ async function executeTask(taskId, normalizedPayload, portalMeta) {
     const totalSteps = stages.length;
     let currentStep = 0;
     let etapaNombre = "inicializando";
+    const phaseDurations = {};
+    let currentPhaseName = null;
+    let currentPhaseStartedAt = Date.now();
 
     const stageIndexByName = new Map(stages.map((s, idx) => [s?.name, idx]));
 
@@ -98,6 +275,15 @@ async function executeTask(taskId, normalizedPayload, portalMeta) {
 
     const hooks = {
         onStage: async ({ name }) => {
+            const now = Date.now();
+            if (currentPhaseName) {
+                phaseDurations[currentPhaseName] =
+                    (phaseDurations[currentPhaseName] || 0) + Math.max(0, now - currentPhaseStartedAt);
+            }
+            currentPhaseName = name;
+            currentPhaseStartedAt = now;
+            taskStore.patchTask(taskId, { phase_durations: { ...phaseDurations } });
+
             etapaNombre = name;
             const idx = stageIndexByName.get(name);
             currentStep = Number.isInteger(idx) && idx >= 0 ? idx + 1 : currentStep + 1;
@@ -159,6 +345,27 @@ async function executeTask(taskId, normalizedPayload, portalMeta) {
                     meta: {},
                 });
             }
+
+            const formSnap = await readFormErrorSnapshot(page);
+            const formError = formSnap?.content || "";
+            if (formError) {
+                taskStore.patchTask(taskId, {
+                    form_error_content: formError,
+                    form_error_field: formSnap?.field || null,
+                });
+                const fieldSuffix = formSnap?.field ? ` (campo: ${formSnap.field})` : "";
+                trackingClient.updateExecution(taskId, { detalle: `FormError: ${formError}${fieldSuffix}` });
+                trackingClient.createEvent({
+                    task_id: taskId,
+                    event_type: "form_error",
+                    etapa_nombre: etapaNombre,
+                    etapa_numero: `${currentStep}/${totalSteps}`,
+                    message: formSnap?.field ? `${formError} (campo: ${formSnap.field})` : formError,
+                    level: "warn",
+                    timestamp: new Date().toISOString(),
+                    meta: {},
+                });
+            }
             return shot;
         },
     };
@@ -166,8 +373,45 @@ async function executeTask(taskId, normalizedPayload, portalMeta) {
     try {
         logTask(taskId, "iniciando RPA", { totalSteps }, { level: "info" });
         const result = await runCetelemFlowWithRetries(normalizedPayload, hooks);
+        const doneAt = Date.now();
+        if (currentPhaseName) {
+            phaseDurations[currentPhaseName] =
+                (phaseDurations[currentPhaseName] || 0) + Math.max(0, doneAt - currentPhaseStartedAt);
+            taskStore.patchTask(taskId, { phase_durations: { ...phaseDurations } });
+        }
         setRobotError(null);
-        taskStore.completeTask(taskId, result?.result ?? result ?? null);
+
+        const flowResult = result?.result ?? result ?? null;
+        const ok = isSuccessfulFlowResult(normalizedPayload, flowResult);
+
+        if (!ok) {
+            const task = taskStore.getTask(taskId);
+            const detalle = mergeDetalle(task?.detalle, flowResult?.mensaje_det || "Error: ejecuciÃ³n finalizÃ³ sin Ã©xito");
+
+            taskStore.patchTask(taskId, { result: flowResult ?? null });
+            taskStore.failTask(taskId, { detalle });
+
+            trackingClient.updateExecution(taskId, {
+                status: "fallido",
+                detalle,
+                finished_at: new Date().toISOString(),
+                result: flowResult ?? null,
+            });
+            trackingClient.createEvent({
+                task_id: taskId,
+                event_type: "error",
+                etapa_nombre: etapaNombre,
+                etapa_numero: `${currentStep}/${totalSteps}`,
+                message: detalle,
+                level: "error",
+                timestamp: new Date().toISOString(),
+                meta: { type: "business_result" },
+            });
+
+            return;
+        }
+
+        taskStore.completeTask(taskId, flowResult);
 
         trackingClient.updateExecution(taskId, {
             status: "completado",
@@ -176,7 +420,7 @@ async function executeTask(taskId, normalizedPayload, portalMeta) {
             total_steps: totalSteps,
             etapa_numero: `${totalSteps}/${totalSteps}`,
             finished_at: new Date().toISOString(),
-            result: result?.result ?? result ?? null,
+            result: flowResult,
         });
         trackingClient.createEvent({
             task_id: taskId,
@@ -189,13 +433,21 @@ async function executeTask(taskId, normalizedPayload, portalMeta) {
             meta: {},
         });
     } catch (error) {
+        const doneAt = Date.now();
+        if (currentPhaseName) {
+            phaseDurations[currentPhaseName] =
+                (phaseDurations[currentPhaseName] || 0) + Math.max(0, doneAt - currentPhaseStartedAt);
+            taskStore.patchTask(taskId, { phase_durations: { ...phaseDurations } });
+        }
         setRobotError(error);
         logger.error(`[task ${String(taskId).slice(0, 8)}] error: ${error?.message || error}`);
 
         // intentar screenshot si el flow expone page en error (hooks), si no, solo marcar fallo
         const errorDetalle = buildTaskDetalle(error);
+        const formError = taskStore.getTask(taskId)?.form_error_content;
+        const formErrorLine = formError ? `\nFormError: ${formError}` : "";
         const lastProgress = taskStore.getTask(taskId)?.detalle;
-        const detalle = lastProgress ? `${lastProgress}\nError: ${errorDetalle}` : errorDetalle;
+        const detalle = lastProgress ? `${lastProgress}\nError: ${errorDetalle}${formErrorLine}` : `${errorDetalle}${formErrorLine}`;
         taskStore.failTask(taskId, {
             detalle,
             error: {

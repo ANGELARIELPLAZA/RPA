@@ -1020,6 +1020,223 @@ function parseMoneyNumber(value) {
     return Number.isFinite(num) ? num : 0.0;
 }
 
+function parseMoneyFromText(value) {
+    const raw = String(value ?? "").trim();
+    if (!raw) return null;
+    const cleaned = raw.replace(/[$\s]/g, "").replace(/,/g, "").replace(/[^\d.-]/g, "");
+    const num = Number.parseFloat(cleaned);
+    return Number.isFinite(num) ? num : null;
+}
+
+function parseAnualidadRangeFromText(text) {
+    const raw = String(text || "");
+    // Ej: "Su importe de anualidad debe estar entre $16,237 y $32,474"
+    const matches = raw.match(/\$?\s*[\d,.]+/g) || [];
+    const nums = matches
+        .map((m) => parseMoneyFromText(m))
+        .filter((n) => typeof n === "number" && Number.isFinite(n));
+    if (nums.length < 2) return null;
+    const min = Math.min(nums[0], nums[1]);
+    const max = Math.max(nums[0], nums[1]);
+    if (!Number.isFinite(min) || !Number.isFinite(max)) return null;
+    return { min, max };
+}
+
+async function readAnualidadMaxMinMessage(page) {
+    try {
+        const text = await page.evaluate(() => {
+            const normalize = (s) => String(s || "").replace(/\s+/g, " ").trim();
+
+            const pick = (el) => {
+                const t = normalize(el?.innerText || el?.textContent);
+                return t || "";
+            };
+
+            const matchesRangeMessage = (t) => {
+                const lower = String(t || "").toLowerCase();
+                if (!lower) return false;
+                // Mensajes típicos: "La anualidad debe estar entre $X y $Y", "debe estar entre ...", "mínimo/máximo".
+                const hasBetween = lower.includes("debe estar entre") || lower.includes("entre $") || (lower.includes("entre") && lower.includes("$"));
+                const hasMinMax = lower.includes("mín") || lower.includes("min") || lower.includes("máx") || lower.includes("max");
+                const mentionsAnualidad = lower.includes("anualidad") || lower.includes("anualid");
+                return (mentionsAnualidad && (hasBetween || hasMinMax)) || (hasBetween && mentionsAnualidad);
+            };
+
+            const candidates = [];
+            candidates.push(document.querySelector('output[for="anualidadMaxMin"]'));
+            candidates.push(document.querySelector('output[for*="anualidad"]'));
+            candidates.push(document.querySelector('#anualidadMaxMin'));
+            candidates.push(document.querySelector('[id*="anualidad"][id*="maxmin"]'));
+            candidates.push(document.querySelector('[id*="anualidad"][class*="alert"]'));
+            candidates.push(document.querySelector('#18n_customer_anualidad_maxmin'));
+
+            for (const el of candidates.filter(Boolean)) {
+                const t = pick(el);
+                if (t) return t;
+            }
+
+            // Cerca del campo (por si el portal pinta el mensaje como helper/validation).
+            const annuityEl = document.querySelector("#annuityAmount") || document.querySelector("#annuityMonth");
+            if (annuityEl) {
+                const group =
+                    annuityEl.closest(".form-group") ||
+                    annuityEl.closest(".field") ||
+                    annuityEl.closest("td") ||
+                    annuityEl.closest("tr") ||
+                    annuityEl.parentElement;
+
+                if (group) {
+                    const near = Array.from(group.querySelectorAll("output,div,span,p,small,label"))
+                        .map((el) => pick(el))
+                        .filter(Boolean);
+                    const found = near.find(matchesRangeMessage);
+                    if (found) return found;
+                }
+
+                const sibling = annuityEl.nextElementSibling;
+                if (sibling) {
+                    const t = pick(sibling);
+                    if (matchesRangeMessage(t)) return t;
+                }
+            }
+
+            // Fallback: busca cualquier texto que parezca el mensaje.
+            const all = Array.from(document.querySelectorAll("output,div,span,p,small"));
+            for (const el of all) {
+                const t = pick(el);
+                if (!t) continue;
+                if (matchesRangeMessage(t)) {
+                    return t;
+                }
+            }
+
+            return "";
+        });
+
+        const trimmed = String(text || "").trim();
+        if (trimmed) return trimmed;
+
+        // A veces el mensaje se pinta con un pequeño delay tras disparar onchange/validación.
+        await page.waitForTimeout(250).catch(() => { });
+        const retry = await page.evaluate(() => {
+            const normalize = (s) => String(s || "").replace(/\s+/g, " ").trim();
+            const all = Array.from(document.querySelectorAll("output,div,span,p,small"));
+            for (const el of all) {
+                const t = normalize(el?.innerText || el?.textContent);
+                if (!t) continue;
+                const lower = t.toLowerCase();
+                if (
+                    (lower.includes("anualidad") || lower.includes("anualid")) &&
+                    (lower.includes("debe estar entre") || lower.includes("entre $") || (lower.includes("entre") && lower.includes("$")))
+                ) {
+                    return t;
+                }
+            }
+            return "";
+        }).catch(() => "");
+
+        return String(retry || "").trim();
+    } catch {
+        return "";
+    }
+}
+
+async function readFormErrorSnapshot(page) {
+    if (!page) return { content: "", field: "" };
+
+    try {
+        const snap = await page.evaluate(() => {
+            const normalize = (s) => String(s || "").replace(/\s+/g, " ").trim();
+
+            const isVisible = (el) => {
+                if (!el) return false;
+                const style = window.getComputedStyle(el);
+                if (!style) return false;
+                if (style.display === "none" || style.visibility === "hidden" || style.opacity === "0") return false;
+                const rect = el.getBoundingClientRect?.();
+                if (!rect) return true;
+                return rect.width > 0 && rect.height > 0;
+            };
+
+            const pickText = (el) => normalize(el?.innerText || el?.textContent);
+
+            const getLabelForInput = (input) => {
+                if (!input) return "";
+                const id = input.getAttribute?.("id");
+                if (id && window.CSS && CSS.escape) {
+                    const l = document.querySelector(`label[for="${CSS.escape(id)}"]`);
+                    const t = pickText(l);
+                    if (t) return t;
+                }
+                const wrapLabel = input.closest("label");
+                const wt = pickText(wrapLabel);
+                if (wt) return wt;
+                const group = input.closest(".form-group") || input.closest(".field") || input.closest("td") || input.closest("tr");
+                if (group) {
+                    const lab = group.querySelector("label");
+                    const t = pickText(lab);
+                    if (t) return t;
+                }
+                return "";
+            };
+
+            const candidates = [
+                document.querySelector("#formErrorContent"),
+                document.querySelector(".formErrorContent"),
+                document.querySelector(".messager-body:visible"),
+                document.querySelector(".messager-body"),
+            ].filter(Boolean);
+
+            let content = "";
+            for (const el of candidates) {
+                const t = pickText(el);
+                if (t) { content = t; break; }
+            }
+            if (!content) return { content: "", field: "" };
+
+            const needle = "por favor seleccione";
+            const errorEls = Array.from(document.querySelectorAll("div,span,small,p,li"))
+                .filter((el) => isVisible(el))
+                .map((el) => ({ el, t: pickText(el) }))
+                .filter((x) => x.t && x.t.toLowerCase().includes(needle));
+
+            for (const { el } of errorEls) {
+                const scope = el.closest(".form-group") || el.closest(".field") || el.closest("td") || el.closest("tr") || el.parentElement;
+                const input = scope?.querySelector?.("select, input, textarea");
+                const label = getLabelForInput(input);
+                const id = input?.getAttribute?.("id") || "";
+                if (label || id) {
+                    return { content, field: label ? `${label}${id ? ` (#${id})` : ""}` : (id ? `#${id}` : "") };
+                }
+            }
+
+            const invalid = Array.from(document.querySelectorAll("select, input, textarea"))
+                .filter((el) => isVisible(el))
+                .filter((el) => {
+                    const aria = String(el.getAttribute?.("aria-invalid") || "").toLowerCase() === "true";
+                    const cls = String(el.className || "").toLowerCase();
+                    return aria || cls.includes("invalid") || cls.includes("error");
+                })[0];
+
+            if (invalid) {
+                const label = getLabelForInput(invalid);
+                const id = invalid.getAttribute?.("id") || "";
+                return { content, field: label ? `${label}${id ? ` (#${id})` : ""}` : (id ? `#${id}` : "") };
+            }
+
+            return { content, field: "" };
+        });
+
+        const content = String(snap?.content || "").trim();
+        const field = String(snap?.field || "").trim();
+        if (!content) return { content: "", field: "" };
+        const clipped = content.length > 800 ? `${content.slice(0, 799)}…` : content;
+        return { content: clipped, field };
+    } catch {
+        return { content: "", field: "" };
+    }
+}
+
 async function readValueByLabel(page, labelText) {
     const desired = String(labelText || "").trim().toLowerCase();
     if (!desired) return "";
@@ -1101,8 +1318,30 @@ async function etapaGuardarCotizacion(popup, data) {
 
     const cot = data?.cotizacion || {};
 
+    function detectCreditPlanCA(label) {
+        const raw = String(label || "");
+        if (!raw.trim()) return false;
+        // Acepta variaciones comunes: "C/A", "C / A", "CA", "C.A.", etc.
+        return /(^|[^A-Z])C\s*\/?\s*A([^A-Z]|$)/i.test(raw);
+    }
+
     // Campos de anualidad: solo aplicar si el plan de crédito seleccionado es C/A.
     // (El label del select #creditDepositPlan suele traer "C/A" cuando aplica.)
+    function parseAnnuityMonthFromCreditPlanLabel(label) {
+        const raw = normalizeString(label);
+        if (!raw) return "";
+
+        // Formatos observados: "C/A 04-26", "C/A 4/26", etc.
+        // Nota: el label puede traer otros números antes (ej. "11.84 C/A 04-26 PF 127"),
+        // por eso buscamos específicamente el mes/año después de C/A.
+        const m = raw.match(/C\s*\/?\s*A\s*([0-1]?\d)\s*[-/]\s*(\d{2,4})/i);
+        if (!m) return "";
+
+        const monthNum = Number(m[1]);
+        if (!Number.isFinite(monthNum) || monthNum < 1 || monthNum > 12) return "";
+        return String(monthNum).padStart(2, "0");
+    }
+
     let creditDepositPlanLabel = "";
     try {
         const creditPlanLocator = await getBestSelectLocator(popup, "#creditDepositPlan");
@@ -1110,12 +1349,25 @@ async function etapaGuardarCotizacion(popup, data) {
         creditDepositPlanLabel = String(snap?.selectedLabel ?? "").trim();
     } catch { }
 
-    const isCreditPlanCA = creditDepositPlanLabel.toUpperCase().includes("C/A");
+    const isCreditPlanCA = detectCreditPlanCA(creditDepositPlanLabel);
+    const inferredAnnuityMonth = empty(cot.annuityMonth)
+        ? parseAnnuityMonthFromCreditPlanLabel(creditDepositPlanLabel)
+        : "";
+
+    if (isCreditPlanCA && empty(cot.annuityMonth) && inferredAnnuityMonth) {
+        cot.annuityMonth = inferredAnnuityMonth;
+    }
 
     logger.info(
-        `[cotizacion] anualidad: planLabel="${creditDepositPlanLabel || "N/A"}" isCA=${isCreditPlanCA} annuityMonth="${normalizeString(cot.annuityMonth)}" annuityAmount="${normalizeString(cot.annuityAmount)}"`
+        `[cotizacion] anualidad: planLabel="${creditDepositPlanLabel || "N/A"}" isCA=${isCreditPlanCA} annuityMonth="${normalizeString(cot.annuityMonth)}" annuityAmount="${normalizeString(cot.annuityAmount)}" inferredMonth="${inferredAnnuityMonth}"`
     );
     if (isCreditPlanCA) {
+        if (empty(cot.annuityMonth) && empty(cot.annuityAmount)) {
+            logger.warn(
+                `[cotizacion] anualidad: plan C/A detectado pero no se recibieron campos (annuityMonth/annuityAmount). planLabel="${creditDepositPlanLabel || "N/A"}"`
+            );
+        }
+
         if (!empty(cot.annuityMonth)) {
             const monthValue = normalizeAnnuityMonth(cot.annuityMonth);
             if (monthValue) {
@@ -1129,6 +1381,7 @@ async function etapaGuardarCotizacion(popup, data) {
             String(cot.annuityAmount).trim() !== ""
         ) {
             const desiredAmount = String(cot.annuityAmount).replace(/,/g, "").trim();
+            const desiredNum = parseMoneyFromText(desiredAmount);
 
             await popup.waitForSelector("#annuityAmount", { state: "visible", timeout: 15000 });
             await popup.waitForFunction(
@@ -1162,6 +1415,27 @@ async function etapaGuardarCotizacion(popup, data) {
             }
 
             logger.info(`[cotizacion] anualidad: annuityAmount desired="${desiredAmount}" after="${after}"`);
+
+            // Mensaje de rango (puede variar el texto/selector). Si el monto queda fuera, falla con el mensaje.
+            const rangeMsg = await readAnualidadMaxMinMessage(popup);
+            if (rangeMsg) {
+                const range = parseAnualidadRangeFromText(rangeMsg);
+                const afterNum = parseMoneyFromText(after);
+
+                const outOfRange =
+                    typeof desiredNum === "number" &&
+                    range &&
+                    (desiredNum < range.min || desiredNum > range.max);
+
+                const gotResetToZero = typeof afterNum === "number" && afterNum === 0 && desiredNum !== null && desiredNum !== 0;
+
+                if (outOfRange || gotResetToZero) {
+                    if (hooks?.onProgress) {
+                        await hooks.onProgress({ page: popup, message: rangeMsg }).catch(() => { });
+                    }
+                    throw new Error(rangeMsg);
+                }
+            }
         }
     } else if (!empty(cot.annuityMonth) || !empty(cot.annuityAmount)) {
         logger.info(
@@ -1292,7 +1566,21 @@ async function etapaGuardarCotizacion(popup, data) {
     const importe_pago_13 = parseMoneyNumber(pago13Raw);
 
     if (!folio) {
-        const msg = "Error: No se recibio folio del servidor tras el guardado.";
+        const baseMsg = "Error: No se recibio folio del servidor tras el guardado.";
+        const formSnap = await readFormErrorSnapshot(popup).catch(() => ({ content: "", field: "" }));
+        const formErrorNow = String(formSnap?.content || "").trim();
+        const formErrorFieldNow = String(formSnap?.field || "").trim();
+        const rangeMsgNow = await readAnualidadMaxMinMessage(popup).catch(() => "");
+        const parsedRangeNow = rangeMsgNow ? parseAnualidadRangeFromText(rangeMsgNow) : null;
+        const rango_anualidad = parsedRangeNow
+            ? { minimo: parsedRangeNow.min, maximo: parsedRangeNow.max }
+            : null;
+
+        const extra = [];
+        if (rangeMsgNow) extra.push(`Rango anualidad: ${rangeMsgNow}`);
+        if (formErrorNow) extra.push(`FormError: ${formErrorNow}${formErrorFieldNow ? ` (campo: ${formErrorFieldNow})` : ""}`);
+
+        const msg = extra.length ? `${baseMsg}\n${extra.join("\n")}` : baseMsg;
 
         if (hooks?.onProgress) {
             await hooks.onProgress({
@@ -1309,6 +1597,10 @@ async function etapaGuardarCotizacion(popup, data) {
             estatus_code: 0,
             json: backendJson,
             mensaje_det: msg,
+            form_error_content: formErrorNow ? String(formErrorNow) : null,
+            form_error_field: formErrorFieldNow ? String(formErrorFieldNow) : null,
+            anualidad_range_message: rangeMsgNow ? String(rangeMsgNow) : null,
+            rango_anualidad,
             logs: Array.isArray(backendJson?.logs) ? backendJson.logs : [],
             phase_durations:
                 backendJson?.phase_durations &&
@@ -1317,6 +1609,12 @@ async function etapaGuardarCotizacion(popup, data) {
                     : {},
         };
     }
+
+    const rangeMsgNow = await readAnualidadMaxMinMessage(popup).catch(() => "");
+    const parsedRangeNow = rangeMsgNow ? parseAnualidadRangeFromText(rangeMsgNow) : null;
+    const rango_anualidad = parsedRangeNow
+        ? { minimo: parsedRangeNow.min, maximo: parsedRangeNow.max }
+        : null;
 
     // Cierra popup de "Cotizacion guardada exitosamente" si aparece.
     await cerrarPopupGuardadoSiExiste(popup).catch(() => { });
@@ -1344,6 +1642,8 @@ async function etapaGuardarCotizacion(popup, data) {
         estatus_code: 1,
         json: backendJson,
         mensaje_det: "EXITOSO",
+        ...(rangeMsgNow ? { anualidad_range_message: String(rangeMsgNow) } : {}),
+        ...(rango_anualidad ? { rango_anualidad } : {}),
         logs: Array.isArray(backendJson?.logs) ? backendJson.logs : [],
         phase_durations:
             backendJson?.phase_durations &&

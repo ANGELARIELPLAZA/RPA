@@ -32,6 +32,21 @@ function formatearSalidaCliente(data) {
 
     if (nivel_detalle === "guardar_cotizacion") {
         const result = data?.result && typeof data.result === "object" ? data.result : {};
+        const form_error_content = String(result?.form_error_content ?? data?.form_error_content ?? "").trim() || null;
+        const form_error_field = String(result?.form_error_field ?? data?.form_error_field ?? "").trim() || null;
+        const anualidad_range_message = String(result?.anualidad_range_message ?? "").trim() || null;
+        const rango_anualidad_raw =
+            result?.rango_anualidad && typeof result.rango_anualidad === "object" ? result.rango_anualidad : null;
+        const rango_anualidad =
+            rango_anualidad_raw &&
+            Number.isFinite(Number(rango_anualidad_raw.minimo)) &&
+            Number.isFinite(Number(rango_anualidad_raw.maximo))
+                ? { minimo: Number(rango_anualidad_raw.minimo), maximo: Number(rango_anualidad_raw.maximo) }
+                : null;
+        const phase_durations =
+            result?.phase_durations && typeof result.phase_durations === "object"
+                ? result.phase_durations
+                : (data?.phase_durations && typeof data.phase_durations === "object" ? data.phase_durations : {});
 
         if (status === "completado") {
             return {
@@ -44,11 +59,11 @@ function formatearSalidaCliente(data) {
                     : (result?.folio ? 1 : 0),
                 json: result?.json && typeof result.json === "object" ? result.json : null,
                 mensaje_det: String(result?.mensaje_det ?? (result?.folio ? "EXITOSO" : "Error")),
-                logs: Array.isArray(result?.logs) ? result.logs : [],
-                phase_durations:
-                    result?.phase_durations && typeof result.phase_durations === "object"
-                        ? result.phase_durations
-                        : {},
+                ...(form_error_content ? { form_error_content } : {}),
+                ...(form_error_field ? { form_error_field } : {}),
+                ...(anualidad_range_message ? { anualidad_range_message } : {}),
+                ...(rango_anualidad ? { rango_anualidad } : {}),
+                phase_durations,
             };
         }
 
@@ -61,8 +76,11 @@ function formatearSalidaCliente(data) {
                 estatus_code: 0,
                 json: null,
                 mensaje_det: sanitizeDetalle(data?.detalle),
-                logs: [],
-                phase_durations: {},
+                ...(form_error_content ? { form_error_content } : {}),
+                ...(form_error_field ? { form_error_field } : {}),
+                ...(anualidad_range_message ? { anualidad_range_message } : {}),
+                ...(rango_anualidad ? { rango_anualidad } : {}),
+                phase_durations,
             };
         }
 
@@ -74,8 +92,11 @@ function formatearSalidaCliente(data) {
             estatus_code: 2,
             json: null,
             mensaje_det: sanitizeDetalle(data?.detalle ?? data?.status ?? "En progreso"),
-            logs: [],
-            phase_durations: {},
+            ...(form_error_content ? { form_error_content } : {}),
+            ...(form_error_field ? { form_error_field } : {}),
+            ...(anualidad_range_message ? { anualidad_range_message } : {}),
+            ...(rango_anualidad ? { rango_anualidad } : {}),
+            phase_durations,
         };
     }
 
