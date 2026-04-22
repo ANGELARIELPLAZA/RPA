@@ -9,6 +9,7 @@ async function getHealth(req, res) {
         robot: snapshot.robot,
         uptime: formatShortDuration(snapshot.uptime_ms),
         uptime_ms: snapshot.uptime_ms,
+        build: snapshot.build,
         activeContexts: snapshot.activeContexts,
         queuedTasks: snapshot.queuedTasks,
         metrics: snapshot.metrics,
@@ -20,4 +21,3 @@ async function getHealth(req, res) {
 module.exports = {
     getHealth,
 };
-
