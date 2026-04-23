@@ -216,41 +216,6 @@
           "path": ["cotizar-cetelem-async"]
         }
       }
-    },
-    {
-      "name": "Cetelem - Cotizar seguro (enqueue) (seleccion_seguro - nuevo)",
-      "event": [
-        {
-          "listen": "test",
-          "script": {
-            "type": "text/javascript",
-            "exec": [
-              "if (pm.response.code === 202) {",
-              "  const j = pm.response.json();",
-              "  if (j && j.task_id) pm.collectionVariables.set('task_id', j.task_id);",
-              "}"
-            ]
-          }
-        }
-      ],
-      "request": {
-        "method": "POST",
-        "header": [
-          { "key": "Content-Type", "value": "application/json", "type": "text" },
-          { "key": "x-api-key", "value": "{{api_key}}", "type": "text" }
-        ],
-        "body": {
-          "mode": "raw",
-          "raw": "{\n  \"agencia\": \"Primavera\",\n  \"nivel_detalle\": \"seleccion_seguro\",\n  \"tipo_vehiculo\": \"N\",\n  \"uso_vehicular\": \"Personal\",\n  \"marca\": \"KIA\",\n  \"anio\": 2024,\n  \"modelo\": \"SPORTAGE\",\n  \"version\": \"EX\",\n  \"garantia_extendida\": 0,\n  \"seguro_gap\": \"N\",\n  \"plan_gap\": \"\",\n  \"tipo_pago_gap\": \"C\",\n  \"enganche_porcentaje\": 20,\n  \"plan_credito\": \"2504\",\n  \"plazo_credito\": \"36\",\n  \"contratacion_seguro\": \"01\",\n  \"tipo_seguro\": \"01\",\n  \"forma_pago\": \"01\",\n  \"paquete_seguro\": \"PLUS\",\n  \"aseguradora_seleccionada\": \"HDI\",\n  \"codigo_postal\": \"55764\"\n}\n"
-        },
-        "url": {
-          "raw": "http://{{host}}:{{port}}/cotizar-seguro-cetelem",
-          "protocol": "http",
-          "host": ["{{host}}"],
-          "port": "{{port}}",
-          "path": ["cotizar-seguro-cetelem"]
-        }
-      }
     }
   ],
   "event": [],

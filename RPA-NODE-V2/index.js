@@ -390,9 +390,10 @@ function resolveSelectOption(selectSnapshot, selector, desiredRaw) {
     return null;
 }
 
-async function esperarYSeleccionar(page, selector, value, timeout = 30000) {
+async function esperarYSeleccionar(page, selector, value, timeout = 30000, options = {}) {
     const desired = normalizeString(value);
     const hooks = page?.__rpaHooks;
+    const force = Boolean(options?.force);
 
     if (empty(desired)) {
         if (hooks?.onProgress) {
@@ -414,8 +415,22 @@ async function esperarYSeleccionar(page, selector, value, timeout = 30000) {
             const nodes = Array.from(document.querySelectorAll(sel));
             const select = nodes.find((n) => n && n.tagName === "SELECT" && !n.disabled);
             if (!select) return false;
-            // "0" o "1" suele ser placeholder, esperamos 2+
-            return (select.options?.length || 0) > 1;
+            const opts = Array.from(select.options || []).map((o) => ({
+                value: String(o?.value ?? "").trim(),
+                label: String(o?.label ?? o?.textContent ?? "").trim(),
+            }));
+
+            // Considera "cargado" si existe al menos 1 opciÃ³n "real" (no placeholder).
+            const meaningful = opts.filter((o) => {
+                const value = String(o.value || "").trim();
+                const label = String(o.label || "").trim().toLowerCase();
+                if (value === "" || value === "-1" || value === "0") {
+                    if (label.includes("seleccione") || label.includes("seleccion")) return false;
+                }
+                return true;
+            });
+
+            return meaningful.length > 0;
         },
         selector,
         { timeout }
@@ -495,6 +510,20 @@ async function esperarYSeleccionar(page, selector, value, timeout = 30000) {
                 : `Ya seleccionado ${selector}=${desired}`;
             await hooks.onProgress({ page, message: msg }).catch(() => { });
         }
+        if (force && !empty(targetValue || desired)) {
+            const desiredValue = targetValue || desired;
+            await locator.evaluate(
+                (el, val) => {
+                    const select = el;
+                    select.value = String(val);
+                    select.dispatchEvent(new Event("input", { bubbles: true }));
+                    select.dispatchEvent(new Event("change", { bubbles: true }));
+                },
+                desiredValue
+            ).catch(() => { });
+            await page.waitForTimeout(500);
+            return;
+        }
         await page.waitForTimeout(250);
         return;
     }
@@ -541,6 +570,37 @@ async function esperarYSeleccionar(page, selector, value, timeout = 30000) {
             }
             await retryLocator.selectOption(targetValue || desired, { timeout }).catch(() => { });
             await page.waitForTimeout(500);
+        }
+    }
+}
+
+async function reintentarSelectDependiente(page, { dependeDe, objetivo, timeout = 60000, reintentos = 2 } = {}) {
+    const hooks = page?.__rpaHooks;
+    const dependencias = Array.isArray(dependeDe) ? dependeDe : [dependeDe].filter(Boolean);
+
+    for (let attempt = 1; attempt <= Math.max(1, reintentos + 1); attempt += 1) {
+        try {
+            await esperarYSeleccionar(page, objetivo.selector, objetivo.value, timeout);
+            return;
+        } catch (error) {
+            if (attempt > reintentos) throw error;
+
+            if (hooks?.onProgress) {
+                await hooks.onProgress({
+                    page,
+                    message: `No se pudo seleccionar ${objetivo.selector} (intento ${attempt}/${reintentos + 1}). Reintentando campo(s) anterior(es)...`,
+                }).catch(() => { });
+            }
+
+            // Re-disparar el onchange del/los campo(s) anterior(es) (aunque ya estÃ©n seleccionados) para forzar recarga de opciones.
+            for (const dep of dependencias) {
+                if (!dep?.selector) continue;
+                await esperarYSeleccionar(page, dep.selector, dep.value, timeout, { force: true }).catch(() => { });
+                await page.waitForTimeout(400);
+            }
+            await page.mouse.click(10, 10).catch(() => { });
+            await esperarOverlayCarga(page, { timeout: Math.min(timeout, 15000) }).catch(() => { });
+            await page.waitForTimeout(1200);
         }
     }
 }
@@ -1194,7 +1254,15 @@ async function etapaSeguro(popup, data) {
     await popup.waitForTimeout(3000);
 
     await waitUntilEnabled(popup, "#insurancePaymentTermRemnant", { timeout: 60000, pollMs: 300 });
-    await esperarYSeleccionar(popup, "#insurancePaymentTermRemnant", s.insurancePaymentTermRemnant);
+    await reintentarSelectDependiente(popup, {
+        dependeDe: [
+            { selector: "#insuranceType", value: s.insuranceType },
+            { selector: "#insuranceRecruitment", value: s.insuranceRecruitment },
+        ],
+        objetivo: { selector: "#insurancePaymentTermRemnant", value: s.insurancePaymentTermRemnant },
+        timeout: 60000,
+        reintentos: 2,
+    });
     await popup.waitForTimeout(3000);
 
     await waitUntilEnabled(popup, "#insuranceCoverageLorant", { timeout: 60000, pollMs: 300 });
