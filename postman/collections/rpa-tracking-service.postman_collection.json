@@ -1,0 +1,291 @@
+{
+  "info": {
+    "_postman_id": "6d0f8b6d-7c89-4a3b-93c4-8b8a4e1b0a63",
+    "name": "rpa-tracking-service",
+    "description": "Colección para probar el contenedor rpa-tracking-service.\n\nAuth:\n- Si `API_KEY` está configurado en el servicio, se envía automáticamente en el header `x-api-key` usando la variable `apiKey`.\n- Si `apiKey` está vacío, no se envía auth (útil cuando el servicio corre sin API_KEY).",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "const apiKey = (pm.environment.get('apiKey') || pm.collectionVariables.get('apiKey') || '').trim();",
+          "if (!apiKey) {",
+          "  pm.request.headers.remove('x-api-key');",
+          "  pm.request.headers.remove('authorization');",
+          "} else {",
+          "  pm.request.headers.upsert({ key: 'x-api-key', value: apiKey });",
+          "}"
+        ]
+      }
+    }
+  ],
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:3100" },
+    { "key": "apiKey", "value": "" },
+    { "key": "taskId", "value": "rpa-demo-001" }
+  ],
+  "item": [
+    {
+      "name": "Health",
+      "item": [
+        {
+          "name": "GET /",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('json', () => pm.response.to.be.json);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET /health",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/health"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('json', () => pm.response.to.be.json);"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Executions",
+      "item": [
+        {
+          "name": "POST /executions (crear - genera taskId)",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const guid = pm.variables.replaceIn('{{$guid}}');",
+                  "pm.environment.set('taskId', `rpa-${guid}`);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"task_id\": \"{{taskId}}\",\n  \"source_service\": \"RPA-NODE-V2\",\n  \"status\": \"En progreso\",\n  \"etapa_nombre\": \"inicializando\",\n  \"etapa_numero\": \"0/5\",\n  \"current_step\": 0,\n  \"total_steps\": 5,\n  \"fecha_ejecucion\": \"{{$isoTimestamp}}\",\n  \"started_at\": \"{{$isoTimestamp}}\",\n  \"payload_original\": {\n    \"example\": true\n  },\n  \"payload_normalizado\": {\n    \"example\": true\n  },\n  \"robot_meta\": {\n    \"robot\": \"demo\"\n  },\n  \"portal_meta\": {\n    \"portal\": \"demo\"\n  }\n}\n",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{baseUrl}}/executions"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 201', () => pm.response.to.have.status(201));",
+                  "pm.test('json', () => pm.response.to.be.json);",
+                  "const body = pm.response.json();",
+                  "if (body && body.task_id) pm.environment.set('taskId', body.task_id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "PATCH /executions/:task_id (actualizar)",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"completado\",\n  \"etapa_nombre\": \"completado\",\n  \"etapa_numero\": \"5/5\",\n  \"current_step\": 5,\n  \"total_steps\": 5,\n  \"finished_at\": \"{{$isoTimestamp}}\",\n  \"detalle\": \"Ejecución finalizada\",\n  \"result\": {\n    \"estatus_code\": 0,\n    \"mensaje\": \"OK\",\n    \"folio\": \"FOLIO-DEMO\"\n  }\n}\n",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{baseUrl}}/executions/{{taskId}}"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('json', () => pm.response.to.be.json);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET /executions/:task_id",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/executions/{{taskId}}"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('json', () => pm.response.to.be.json);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET /executions (listar)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/executions?status=&etapa_nombre=&from=&to=&limit=50"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('json', () => pm.response.to.be.json);",
+                  "pm.test('items array', () => {",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body).to.have.property('items');",
+                  "  pm.expect(body.items).to.be.an('array');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Events",
+      "item": [
+        {
+          "name": "POST /events (crear)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"task_id\": \"{{taskId}}\",\n  \"event_type\": \"stage\",\n  \"etapa_nombre\": \"cargando\",\n  \"etapa_numero\": \"1/5\",\n  \"message\": \"Inicio de etapa\",\n  \"detail\": {\n    \"extra\": true\n  },\n  \"level\": \"info\",\n  \"screenshot_url\": \"\",\n  \"timestamp\": \"{{$isoTimestamp}}\",\n  \"meta\": {\n    \"source\": \"postman\"\n  }\n}\n",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{baseUrl}}/events"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 201', () => pm.response.to.have.status(201));",
+                  "pm.test('json', () => pm.response.to.be.json);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET /executions/:task_id/events (listar)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/executions/{{taskId}}/events?limit=200"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('json', () => pm.response.to.be.json);",
+                  "pm.test('items array', () => {",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body).to.have.property('items');",
+                  "  pm.expect(body.items).to.be.an('array');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Metrics",
+      "item": [
+        {
+          "name": "GET /metrics",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/metrics"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('json', () => pm.response.to.be.json);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET /metrics/prometheus",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/metrics/prometheus"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('text response', () => pm.expect(pm.response.text()).to.be.a('string'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -9,6 +9,4 @@ services:
     volumes:
       - ./screenshots:/app/screenshots
       - ./logs:/app/logs
-      - ./videos:/app/videos
     restart: unless-stopped
-

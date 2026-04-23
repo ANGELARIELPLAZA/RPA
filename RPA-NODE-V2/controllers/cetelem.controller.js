@@ -8,7 +8,7 @@ const { buildFlowStages } = require("../services/flowPlan.service");
 const taskStore = require("../services/taskStore.service");
 const trackingClient = require("../services/trackingClient.service");
 const { enqueueExecution } = require("../services/cetelemAsync.service");
-const { takePortalScreenshotBase64 } = require("../services/portalEvidence.service");
+const { takePortalScreenshot } = require("../services/portalEvidence.service");
 
 function uuid() {
     if (crypto.randomUUID) return crypto.randomUUID();
@@ -27,6 +27,12 @@ function isPortalDown(portalStatus) {
     return ["ETIMEDOUT", "ECONNREFUSED", "ECONNRESET", "EAI_AGAIN", "ENOTFOUND"].includes(String(errCode || ""));
 }
 
+function buildPortalDownLabel({ agencia, endpoint } = {}) {
+    const a = String(agencia ?? "").trim() || "desconocida";
+    const e = String(endpoint ?? "").trim().replace(/^\/+/, "") || "unknown_endpoint";
+    return `down_agencia_${a}_endpoint_${e}`;
+}
+
 async function cotizarCetelemAsync(req, res) {
     const task_id = uuid();
     const status_response = `${BASE_URL}/status/${task_id}`;
@@ -35,13 +41,14 @@ async function cotizarCetelemAsync(req, res) {
     const portal = await pingPortal();
     if (isPortalDown(portal)) {
         logger.error("[portal] fuera de servicio", portal);
-        const screenshotBase64 = await takePortalScreenshotBase64(portal?.url);
+        const label = buildPortalDownLabel({ agencia: req?.body?.agencia, endpoint: req?.path });
+        const shot = await takePortalScreenshot(portal?.url, { label });
         return res.status(503).json({
             task_id,
             status: "Fallido",
             detail: "portal de cetelem fuera de servicio",
             status_response,
-            screenshot: { base64: screenshotBase64 },
+            screenshot_url: shot?.url || null,
         });
     }
 
@@ -81,6 +88,8 @@ async function cotizarCetelemAsync(req, res) {
         payload_original: req.body,
         payload_normalizado: normalizedPayload,
         total_steps: stages.length,
+        endpoint: req.path,
+        http_method: req.method,
     });
 
     trackingClient.createExecution({
@@ -139,13 +148,14 @@ module.exports = {
 
         if (isPortalDown(portal)) {
             logger.error("[portal] fuera de servicio", portal);
-            const screenshotBase64 = await takePortalScreenshotBase64(portal?.url);
+            const label = buildPortalDownLabel({ agencia: req?.body?.agencia, endpoint: req?.path });
+            const shot = await takePortalScreenshot(portal?.url, { label });
             return res.status(503).json({
                 task_id,
                 status: "Fallido",
                 detail: "portal de cetelem fuera de servicio",
                 status_response,
-                screenshot: { base64: screenshotBase64 },
+                screenshot_url: shot?.url || null,
             });
         }
 
@@ -184,6 +194,8 @@ module.exports = {
             payload_original: req.body,
             payload_normalizado: normalizedPayload,
             total_steps: stages.length,
+            endpoint: req.path,
+            http_method: req.method,
         });
 
         trackingClient.createExecution({

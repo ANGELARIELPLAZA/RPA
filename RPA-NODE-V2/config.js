@@ -57,7 +57,11 @@ const TRACKING_API_KEY = process.env.TRACKING_API_KEY || "";
 const LOGS_DIR = path.resolve(__dirname, process.env.LOGS_DIR || "./logs");
 const VIDEOS_DIR = path.resolve(__dirname, process.env.VIDEOS_DIR || "./videos/playwright");
 
-for (const dir of [LOGS_DIR, SCREENSHOTS_DIR, VIDEOS_DIR]) {
+// Evita crear carpeta de videos si no se esta grabando video (RECORD_VIDEO=false)
+const dirsToEnsure = [LOGS_DIR, SCREENSHOTS_DIR];
+if (recordVideoEnabled) dirsToEnsure.push(VIDEOS_DIR);
+
+for (const dir of dirsToEnsure) {
     fs.mkdirSync(dir, { recursive: true });
 }
 
@@ -177,6 +181,9 @@ function isRecordVideoEnabled() {
 
 function setRecordVideoEnabled(enabled) {
     recordVideoEnabled = Boolean(enabled);
+    if (recordVideoEnabled) {
+        fs.mkdirSync(VIDEOS_DIR, { recursive: true });
+    }
     return recordVideoEnabled;
 }
 

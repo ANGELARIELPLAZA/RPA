@@ -10,6 +10,7 @@ const healthRoutes = require("./routes/health");
 const statusRoutes = require("./routes/status");
 const cetelemRoutes = require("./routes/cetelem");
 const tasksRoutes = require("./routes/tasks");
+const screenshotsReportRoutes = require("./routes/screenshotsReport");
 
 function createApp() {
     const app = express();
@@ -45,6 +46,7 @@ function createApp() {
     app.use(statusRoutes);
     app.use(tasksRoutes);
     app.use(cetelemRoutes);
+    app.use(screenshotsReportRoutes);
 
     app.get("/", (req, res) => {
         res.json({ service: "RPA-NODE-V2", ok: true });

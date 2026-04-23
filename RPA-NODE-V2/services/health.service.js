@@ -38,7 +38,6 @@ async function getHealthSnapshot() {
         activeContexts: queue.activeContexts,
         queuedTasks: queue.queuedTasks,
         metrics,
-        recentTasks: taskStore.listRecentTasks(10).map(taskStore.toPublicStatus),
     };
 }
 

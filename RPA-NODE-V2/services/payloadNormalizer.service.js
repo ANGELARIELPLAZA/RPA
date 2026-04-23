@@ -182,8 +182,10 @@ function normalizeVehiculo(value) {
     // Aliases comunes (payload externo)
     if (vehiculo.vehicleType === undefined && vehiculo.tipo_vehiculo !== undefined) {
         const raw = String(vehiculo.tipo_vehiculo ?? "").trim().toUpperCase();
-        // "N" suele venir como "Nuevo"
-        vehiculo.vehicleType = raw === "N" ? "Nuevo" : vehiculo.tipo_vehiculo;
+        // "N" / "S" vienen como abreviaturas en integraciones externas.
+        if (raw === "N") vehiculo.vehicleType = "Nuevo";
+        else if (raw === "S") vehiculo.vehicleType = "Seminuevo";
+        else vehiculo.vehicleType = vehiculo.tipo_vehiculo;
     }
 
     if (vehiculo.insuranceVehicleUse === undefined && vehiculo.uso_vehicular !== undefined) {
@@ -269,6 +271,10 @@ function normalizeSeguro(value) {
         seguro.insuranceCP = seguro.codigo_postal;
     }
 
+    if (seguro.insuranceState === undefined && seguro.estado !== undefined) {
+        seguro.insuranceState = seguro.estado;
+    }
+
     if (seguro.insuranceRecruitment === undefined && seguro.contratacion_seguro !== undefined) {
         seguro.insuranceRecruitment = seguro.contratacion_seguro;
     }
@@ -291,6 +297,7 @@ function normalizeSeguro(value) {
 
     for (const key of [
         "insuranceCP",
+        "insuranceState",
         "insuranceRecruitment",
         "insuranceType",
         "insurancePaymentTermRemnant",
@@ -486,6 +493,8 @@ function normalizeFormatoB(body) {
     const seguroKeys = [
         "codigo_postal",
         "insuranceCP",
+        "estado",
+        "insuranceState",
         "contratacion_seguro",
         "insuranceRecruitment",
         "tipo_seguro",

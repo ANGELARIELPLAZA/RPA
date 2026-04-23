@@ -13,7 +13,6 @@ async function getHealth(req, res) {
         activeContexts: snapshot.activeContexts,
         queuedTasks: snapshot.queuedTasks,
         metrics: snapshot.metrics,
-        recentTasks: snapshot.recentTasks,
         portal_meta: snapshot.portal_meta,
     });
 }

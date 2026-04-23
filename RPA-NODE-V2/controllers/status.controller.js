@@ -17,6 +17,11 @@ function getStatus(req, res) {
     const includePayloadRaw = req.query.include_payload ?? req.query.payload ?? req.query.includePayload;
     const includePayload = includePayloadRaw === "1" || includePayloadRaw === "true" || includePayloadRaw === true;
 
+    const includeScreenshotBase64Raw =
+        req.query.include_screenshot_base64 ?? req.query.screenshot_base64 ?? req.query.includeScreenshotBase64;
+    const includeScreenshotBase64 =
+        includeScreenshotBase64Raw === "1" || includeScreenshotBase64Raw === "true" || includeScreenshotBase64Raw === true;
+
     // Formato técnico completo (para soporte)
     if (isDebug) {
         if (!task) {
@@ -25,7 +30,7 @@ function getStatus(req, res) {
                 detalle: "task_id no encontrado",
             });
         }
-        return res.json(taskStore.toPublicStatus(task, { includePayload }));
+        return res.json(taskStore.toPublicStatus(task, { includePayload, includeScreenshotBase64 }));
     }
 
     // Por defecto: formato compatible con polling (waitForJobCompletion)

@@ -30,6 +30,7 @@ function formatearSalidaCliente(data) {
     const status = String(data?.status ?? "").toLowerCase();
     const nivel_detalle = normalizeNivelDetalle(data?.nivel_detalle ?? data?.nivelDetalle);
     const isPlanesDisponibles = nivel_detalle === "planes_disponibles";
+    const isSeleccionSeguro = nivel_detalle === "seleccion_seguro";
 
     if (isPlanesDisponibles) {
         const result = data?.result && typeof data.result === "object" ? data.result : {};
@@ -61,6 +62,49 @@ function formatearSalidaCliente(data) {
         return {
             estatus_code: 2,
             nivel_detalle: "planes_disponibles",
+            mensaje_det: sanitizeDetalle(data?.detalle ?? data?.status ?? "En progreso"),
+        };
+    }
+
+    if (isSeleccionSeguro) {
+        const result = data?.result && typeof data.result === "object" ? data.result : {};
+        const aseguradora = String(result?.aseguradora ?? result?.insuranceOption ?? "").trim() || null;
+        const prima = result?.prima_seleccionada ?? result?.primaSeleccionada ?? result?.prima;
+        const prima_seleccionada =
+            typeof prima === "number"
+                ? prima
+                : (Number.isFinite(Number(prima)) ? Number(prima) : null);
+
+        const rangoRaw = result?.rango_anualidad && typeof result.rango_anualidad === "object" ? result.rango_anualidad : null;
+        const minimo = rangoRaw && Number.isFinite(Number(rangoRaw.minimo)) ? Number(rangoRaw.minimo) : null;
+        const maximo = rangoRaw && Number.isFinite(Number(rangoRaw.maximo)) ? Number(rangoRaw.maximo) : null;
+
+        const base = {
+            aseguradora,
+            prima_seleccionada,
+            anualidad_requerida: result?.anualidad_requerida === true,
+            rango_anualidad: { minimo, maximo },
+        };
+
+        if (status === "completado") {
+            return {
+                ...base,
+                estatus_code: Number.isFinite(Number(result?.estatus_code)) ? Number(result.estatus_code) : 1,
+                mensaje_det: String(result?.mensaje_det ?? "EXITOSO"),
+            };
+        }
+
+        if (status === "fallido") {
+            return {
+                ...base,
+                estatus_code: Number.isFinite(Number(result?.estatus_code)) ? Number(result.estatus_code) : 0,
+                mensaje_det: sanitizeDetalle(result?.mensaje_det ?? data?.detalle),
+            };
+        }
+
+        return {
+            ...base,
+            estatus_code: 2,
             mensaje_det: sanitizeDetalle(data?.detalle ?? data?.status ?? "En progreso"),
         };
     }

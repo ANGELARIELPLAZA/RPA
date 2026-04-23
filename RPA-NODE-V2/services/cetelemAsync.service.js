@@ -543,6 +543,12 @@ async function executeTask(taskId, normalizedPayload, portalMeta) {
         setRobotError(error);
         logger.error(`[task ${String(taskId).slice(0, 8)}] error: ${error?.message || error}`);
 
+        // Si el robot ya tiene page, siempre intentar evidencia.
+        const taskBeforeFail = taskStore.getTask(taskId);
+        if (!taskBeforeFail?.screenshot_url && lastPage) {
+            await hooks.onErrorScreenshot({ page: lastPage }).catch(() => { });
+        }
+
         // intentar screenshot si el flow expone page en error (hooks), si no, solo marcar fallo
         const errorDetalle = buildTaskDetalle(error);
         const formError = taskStore.getTask(taskId)?.form_error_content;

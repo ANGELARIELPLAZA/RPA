@@ -277,6 +277,119 @@ function formatOptionsList(selectSnapshot, { limit = 80 } = {}) {
     return lines.join(", ") + suffix;
 }
 
+function stripDiacritics(value) {
+    try {
+        return String(value ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+    } catch {
+        return String(value ?? "");
+    }
+}
+
+function normalizeCompareText(value) {
+    return stripDiacritics(String(value ?? "")).replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+function getMeaningfulSelectOptions(selector, optionsRaw) {
+    const options = Array.isArray(optionsRaw) ? optionsRaw : [];
+    if (selector !== "#gapInsurancePlan") return options;
+
+    // "-1 → Seleccione" no cuenta como opción real para GAP Plan (solo es placeholder).
+    return options.filter((o) => {
+        const value = normalizeString(o?.value);
+        const label = normalizeCompareText(o?.label);
+        if (value === "-1" || value === "0" || value === "") {
+            if (label.includes("seleccione") || label.includes("seleccion")) return false;
+        }
+        return true;
+    });
+}
+
+function formatOptionsArrows(optionsRaw, { limit = 200 } = {}) {
+    const options = Array.isArray(optionsRaw) ? optionsRaw : [];
+    const slice = options.slice(0, Math.max(0, limit));
+    const lines = slice.map((o) => `${normalizeString(o.value)} -> ${normalizeString(o.label)}`);
+    const suffix = options.length > slice.length ? ` ... (+${options.length - slice.length})` : "";
+    return lines.join("\n") + suffix;
+}
+
+function resolveSelectOption(selectSnapshot, selector, desiredRaw) {
+    const desired = normalizeString(desiredRaw);
+    const desiredLower = desired.toLowerCase();
+    const desiredNorm = normalizeCompareText(desired);
+
+    const options = getMeaningfulSelectOptions(selector, selectSnapshot?.options);
+    const selectedValue = normalizeString(selectSnapshot?.value);
+    const selectedLabel = normalizeString(selectSnapshot?.selectedLabel);
+    const selectedLabelNorm = normalizeCompareText(selectedLabel);
+
+    // ya seleccionado (por value o label)
+    if (selectedValue === desired || selectedLabel.toLowerCase() === desiredLower || selectedLabelNorm === desiredNorm) {
+        const selectedOption = options.find((o) => normalizeString(o.value) === selectedValue) || {
+            value: selectedValue,
+            label: selectedLabel,
+            selected: true,
+        };
+        return { already: true, option: selectedOption, requested: desired, resolved: normalizeString(selectedOption.value), reason: "already" };
+    }
+
+    // match exacto por value
+    const byValue = options.find((o) => normalizeString(o.value) === desired);
+    if (byValue) return { already: false, option: byValue, requested: desired, resolved: normalizeString(byValue.value), reason: "value" };
+
+    // match exacto por label (con y sin diacríticos)
+    const byLabel = options.find((o) => normalizeCompareText(o.label) === desiredNorm);
+    if (byLabel) return { already: false, option: byLabel, requested: desired, resolved: normalizeString(byLabel.value), reason: "label" };
+
+    // Fallbacks específicos (GAP Plan): aceptar payloads legacy como "EE"/"PP" o "4E" cuando el portal cambia prefijos.
+    if (selector === "#gapInsurancePlan") {
+        const desiredUpper = stripDiacritics(desired).replace(/\s+/g, "").trim().toUpperCase();
+        const lastChar = desiredUpper.slice(-1);
+        const parsed = desiredUpper.match(/^(\d+)([EP])$/);
+        const desiredNumber = parsed ? parsed[1] : "";
+
+        let wantedSuffix = "";
+        if (desiredUpper === "EE" || desiredUpper === "E") wantedSuffix = "E";
+        if (desiredUpper === "PP" || desiredUpper === "P") wantedSuffix = "P";
+        if (!wantedSuffix && desiredUpper.includes("ESTANDAR")) wantedSuffix = "E";
+        if (!wantedSuffix && desiredUpper.includes("PLUS")) wantedSuffix = "P";
+        if (!wantedSuffix && (lastChar === "E" || lastChar === "P")) wantedSuffix = lastChar;
+
+        if (wantedSuffix) {
+            const bySuffixAll = options.filter((o) =>
+                stripDiacritics(normalizeString(o.value)).toUpperCase().endsWith(wantedSuffix)
+            );
+
+            if (desiredNumber) {
+                const exact = bySuffixAll.find((o) =>
+                    stripDiacritics(normalizeString(o.value)).toUpperCase() === `${desiredNumber}${wantedSuffix}`
+                );
+                if (exact) {
+                    return { already: false, option: exact, requested: desired, resolved: normalizeString(exact.value), reason: "suffix-exact" };
+                }
+            }
+
+            if (bySuffixAll.length === 1) {
+                return { already: false, option: bySuffixAll[0], requested: desired, resolved: normalizeString(bySuffixAll[0].value), reason: "suffix-unique" };
+            }
+
+            // Desambiguar por keyword en label (ESTANDAR/PLUS)
+            const keyword = wantedSuffix === "E" ? "estandar" : "plus";
+            const byKeyword = bySuffixAll.filter((o) => normalizeCompareText(o.label).includes(keyword));
+            if (byKeyword.length === 1) {
+                return { already: false, option: byKeyword[0], requested: desired, resolved: normalizeString(byKeyword[0].value), reason: "suffix-keyword" };
+            }
+
+            // Si las etiquetas son idénticas, el prefijo numérico suele ser irrelevante (p.ej. 2E/3E con mismo label).
+            const uniqueLabels = Array.from(new Set(bySuffixAll.map((o) => normalizeCompareText(o.label))));
+            if (bySuffixAll.length > 0 && uniqueLabels.length === 1) {
+                return { already: false, option: bySuffixAll[0], requested: desired, resolved: normalizeString(bySuffixAll[0].value), reason: "suffix-same-label" };
+            }
+        }
+    }
+
+    return null;
+}
+
 async function esperarYSeleccionar(page, selector, value, timeout = 30000) {
     const desired = normalizeString(value);
     const hooks = page?.__rpaHooks;
@@ -309,10 +422,13 @@ async function esperarYSeleccionar(page, selector, value, timeout = 30000) {
     );
 
     let snap = await snapshotSelect(locator);
-    let match = findOptionMatch(snap, desired);
+    const meaningfulOptions = getMeaningfulSelectOptions(selector, snap.options);
+    let match = resolveSelectOption(snap, selector, desired);
 
     if (!match) {
-        const optionsList = formatOptionsList(snap, { limit: selector === "#gapInsurancePlan" ? 200 : 80 });
+        const optionsList = selector === "#gapInsurancePlan"
+            ? meaningfulOptions.map((o) => `${normalizeString(o.value)}="${normalizeString(o.label)}"`).join(", ")
+            : formatOptionsList(snap, { limit: 80 });
 
         // Caso especial: plan GAP. Tomar evidencia antes de fallar.
         if (selector === "#gapInsurancePlan") {
@@ -327,37 +443,74 @@ async function esperarYSeleccionar(page, selector, value, timeout = 30000) {
             if (hooks?.onErrorScreenshot) {
                 await hooks.onErrorScreenshot({ page }).catch(() => { });
             }
+
+            const formSnap = await readFormErrorSnapshot(page).catch(() => ({ content: "", field: "" }));
+            const formMessage = normalizeString(formSnap?.content);
+
+            const technical = {
+                detalle: `No se encontró la opción solicitada en ${selector}.`,
+                mensaje_formulario: formMessage || "",
+                campo: selector,
+                valor_solicitado: desired,
+                opciones_disponibles: meaningfulOptions.map((o) => ({
+                    value: normalizeString(o.value),
+                    label: normalizeString(o.label),
+                })),
+            };
+
+            const prettyOptions = formatOptionsArrows(meaningfulOptions, { limit: 200 });
+            const messageLines = [
+                `Error detectado en ${selector}`,
+                "",
+                `No se encontró la opción solicitada con valor ${desired} en el campo ${selector}.`,
+                "",
+                "Detalle del error:",
+                "",
+                `Valor solicitado: ${desired}`,
+                `Total de opciones disponibles: ${meaningfulOptions.length}`,
+                "",
+                "Opciones disponibles en el selector:",
+                prettyOptions || "(sin opciones)",
+            ];
+
+            if (formMessage) {
+                messageLines.push("", "Mensaje del formulario:", formMessage);
+            }
+
+            messageLines.push("", "Si lo quieres más técnico para log, te lo dejo así:", JSON.stringify(technical, null, 2));
+            throw new Error(messageLines.join("\n"));
         }
 
         throw new Error(
-            `Opción no encontrada para ${selector} (deseado="${desired}", actual="${snap.value}" label="${snap.selectedLabel}", opciones=${snap.optionsCount}): ${optionsList}`
+            `Opción no encontrada para ${selector} (deseado="${desired}", actual="${snap.value}" label="${snap.selectedLabel}", opciones=${meaningfulOptions.length || snap.optionsCount}): ${optionsList}`
         );
     }
 
-    if (match.kind === "already") {
+    const targetValue = normalizeString(match?.option?.value ?? match?.resolved ?? "");
+
+    if (match.already) {
         if (hooks?.onProgress) {
-            await hooks.onProgress({ page, message: `Ya seleccionado ${selector}=${desired}` }).catch(() => { });
+            const msg = targetValue && targetValue !== desired
+                ? `Ya seleccionado ${selector}=${targetValue} (solicitado=${desired})`
+                : `Ya seleccionado ${selector}=${desired}`;
+            await hooks.onProgress({ page, message: msg }).catch(() => { });
         }
         await page.waitForTimeout(250);
         return;
     }
 
     if (hooks?.onProgress) {
-        await hooks.onProgress({ page, message: `Seleccionando ${selector}=${desired}` }).catch(() => { });
+        const msg = targetValue && targetValue !== desired
+            ? `Seleccionando ${selector}=${targetValue} (solicitado=${desired})`
+            : `Seleccionando ${selector}=${desired}`;
+        await hooks.onProgress({ page, message: msg }).catch(() => { });
     }
 
     try {
-        if (match.kind === "label") {
-            await locator.selectOption({ label: desired }, { timeout });
-        } else {
-            await locator.selectOption(desired, { timeout });
-        }
+        await locator.selectOption(targetValue || desired, { timeout });
     } catch (error) {
         // Fallback: setear por JS + disparar eventos (útil si el select está oculto o hay plugins).
-        const desiredValue =
-            match.kind === "label"
-                ? (snap.options.find((o) => String(o.label || "").toLowerCase() === desired.toLowerCase())?.value ?? "")
-                : desired;
+        const desiredValue = targetValue || desired;
 
         if (!empty(desiredValue)) {
             await locator.evaluate(
@@ -378,19 +531,15 @@ async function esperarYSeleccionar(page, selector, value, timeout = 30000) {
 
     // Verifica que quedó seleccionado; si no, reintenta una vez sobre un locator visible/enabled.
     snap = await snapshotSelect(locator);
-    match = findOptionMatch(snap, desired);
-    if (!match || match.kind !== "already") {
+    const currentValue = normalizeString(snap?.value);
+    if (!targetValue || currentValue !== targetValue) {
         const retryLocator = page.locator(`${selector}:visible:not([disabled])`).first();
         const retryCount = await retryLocator.count().catch(() => 0);
         if (retryCount > 0) {
             if (hooks?.onProgress) {
                 await hooks.onProgress({ page, message: `Reintentando selección en ${selector} (visible/enabled)` }).catch(() => { });
             }
-            if (match?.kind === "label") {
-                await retryLocator.selectOption({ label: desired }, { timeout }).catch(() => { });
-            } else {
-                await retryLocator.selectOption(desired, { timeout }).catch(() => { });
-            }
+            await retryLocator.selectOption(targetValue || desired, { timeout }).catch(() => { });
             await page.waitForTimeout(500);
         }
     }
@@ -1057,7 +1206,7 @@ async function etapaSeguro(popup, data) {
 
     await popup.mouse.click(10, 10).catch(() => {});
     // El portal a veces deja el overlay visible aunque la tabla ya estÃ© en DOM.
-    // No bloqueamos 60s aquÃ­; la funciÃ³n de espera de tabla harÃ¡ polling y regresarÃ¡ temprano si ya hay primas.
+    // No bloqueamos 60s aquÃ­; la funciÃ³n de espera de tabla hara polling y regresara temprano si ya hay primas.
     await esperarOverlayCarga(popup, { timeout: 5000 }).catch(() => {});
 
     const opcionesSeguro = await esperarTablaSeguroLista(popup, 60000);
@@ -1091,6 +1240,289 @@ async function etapaSeguro(popup, data) {
     ];
 }
 
+function inferIsVehiculoNuevo(data) {
+    const v = data?.vehiculo || {};
+    const raw = normalizeUppercase(v.vehicleType ?? v.tipo_vehiculo ?? "");
+    if (!raw) return true;
+    if (raw === "N") return true;
+    if (raw === "S") return false;
+    if (raw.includes("SEMINUEVO")) return false;
+    if (raw.includes("NUEVO")) return true;
+    return true;
+}
+
+async function tryFillSeguroUbicacion(popup, { isNuevo, cp, estado }) {
+    const cpValue = normalizeString(cp);
+    const estadoValue = normalizeUppercase(estado);
+
+    if (isNuevo) {
+        await waitUntilEnabled(popup, "#insuranceCP", { timeout: 60000, pollMs: 300 });
+        await esperarYLlenar(popup, "#insuranceCP", cpValue);
+        await popup.mouse.click(10, 10);
+        await popup.waitForTimeout(3000);
+        return;
+    }
+
+    // Seminuevo: normalmente el portal pide estado (no CP). Intentar select/inputs conocidos.
+    const candidates = [
+        "#insuranceState",
+        "#insuranceEstado",
+        "select[name='insuranceState']",
+        "select[name='estado']",
+        "#estado",
+    ];
+
+    for (const sel of candidates) {
+        const count = await popup.locator(sel).count().catch(() => 0);
+        if (count <= 0) continue;
+
+        // Si es select, seleccionar; si es input, llenar.
+        const tag = await popup.locator(sel).first().evaluate((el) => el?.tagName || "").catch(() => "");
+        if (String(tag).toUpperCase() === "SELECT") {
+            await waitUntilEnabled(popup, sel, { timeout: 60000, pollMs: 300 });
+            await esperarYSeleccionar(popup, sel, estadoValue);
+        } else {
+            await waitUntilEnabled(popup, sel, { timeout: 60000, pollMs: 300 });
+            await esperarYLlenarUpper(popup, sel, estadoValue);
+        }
+
+        await popup.mouse.click(10, 10);
+        await popup.waitForTimeout(3000);
+        return;
+    }
+
+    // Fallback: si no existe campo de estado, intentar CP si viene informado.
+    if (!empty(cpValue)) {
+        await waitUntilEnabled(popup, "#insuranceCP", { timeout: 60000, pollMs: 300 });
+        await esperarYLlenar(popup, "#insuranceCP", cpValue);
+        await popup.mouse.click(10, 10);
+        await popup.waitForTimeout(3000);
+        return;
+    }
+
+    throw new Error("No encontrÃ© campo de ubicaciÃ³n del seguro para seminuevo (estado/CP).");
+}
+
+async function seleccionarAseguradoraSeguro(page, aseguradora, timeout = 120000) {
+    const key = normalizeUppercase(aseguradora);
+    const selector = `#insuranceRadio_${key}`;
+
+    await page.waitForSelector(selector, { state: "attached", timeout });
+
+    const disabled = await page.evaluate((sel) => {
+        const el = document.querySelector(sel);
+        if (!el) return null;
+        const disabledProp = Boolean(el.disabled);
+        const disabledAttr = el.getAttribute?.("disabled") !== null;
+        const ariaDisabled = String(el.getAttribute?.("aria-disabled") || "").toLowerCase() === "true";
+        return disabledProp || disabledAttr || ariaDisabled;
+    }, selector).catch(() => null);
+
+    if (disabled === true) {
+        return { ok: false, selector, aseguradora: key, reason: "disabled" };
+    }
+
+    await page.locator(selector).check().catch(async () => {
+        await page.locator(selector).click({ force: true });
+    });
+
+    await page.waitForTimeout(1500);
+    return { ok: true, selector, aseguradora: key };
+}
+
+function extractPrimasPorPlazoFromMultiterm(multitermJson, aseguradoraUpper) {
+    const aseguradora = normalizeUppercase(aseguradoraUpper);
+    const out = {};
+    if (!multitermJson || typeof multitermJson !== "object") return out;
+
+    const seen = new Set();
+    const stack = [multitermJson];
+    let visited = 0;
+    const maxNodes = 8000;
+
+    const normalizeTerm = (t) => {
+        const m = String(t ?? "").match(/\d+/);
+        return m ? String(Number(m[0])) : "";
+    };
+
+    const consider = (term, premium) => {
+        const k = normalizeTerm(term);
+        const p = parseMoneyNumber(premium);
+        if (!k) return;
+        if (!Number.isFinite(p) || p <= 0) return;
+        out[k] = p;
+    };
+
+    while (stack.length && visited < maxNodes) {
+        const node = stack.pop();
+        visited += 1;
+
+        if (!node) continue;
+        if (typeof node !== "object") continue;
+
+        if (seen.has(node)) continue;
+        seen.add(node);
+
+        if (Array.isArray(node)) {
+            for (const item of node) stack.push(item);
+            continue;
+        }
+
+        const obj = node;
+
+        const insurerKeys = ["aseguradora", "insurer", "carrier", "company", "insuranceOption", "nombre", "name"];
+        const matchedInsurer = insurerKeys.some((k) => normalizeUppercase(obj[k] ?? "") === aseguradora)
+            || Object.values(obj).some((v) => typeof v === "string" && normalizeUppercase(v) === aseguradora);
+
+        if (matchedInsurer) {
+            consider(obj.plazo ?? obj.term ?? obj.months ?? obj.meses ?? obj.periodo ?? obj.period ?? obj.installments, obj.prima ?? obj.premium ?? obj.amount ?? obj.totalPremium ?? obj.primaTotal ?? obj.total);
+
+            const arrayKeys = ["plazos", "terms", "multiterm", "primas", "premiums", "opciones", "options", "cotizaciones", "quotes"];
+            for (const k of arrayKeys) {
+                if (Array.isArray(obj[k])) {
+                    for (const row of obj[k]) stack.push(row);
+                }
+            }
+        }
+
+        for (const v of Object.values(obj)) {
+            if (v && typeof v === "object") stack.push(v);
+        }
+    }
+
+    return out;
+}
+
+async function readSelectedValue(page, selector) {
+    const loc = page.locator(selector).first();
+    await loc.waitFor({ state: "attached", timeout: 15000 });
+    return await loc.evaluate((el) => {
+        if (!el) return "";
+        const tag = String(el.tagName || "").toUpperCase();
+        if (tag === "SELECT") return String(el.value || "");
+        return String(el.value || el.getAttribute?.("value") || "");
+    }).catch(() => "");
+}
+
+async function etapaSeleccionSeguro(popup, data) {
+    const s = data?.seguro || {};
+    const c = data?.credito || {};
+
+    const aseguradoraElegida = normalizeUppercase(s.insuranceOption);
+    if (empty(aseguradoraElegida)) {
+        return {
+            aseguradora: null,
+            prima_seleccionada: null,
+            anualidad_requerida: false,
+            rango_anualidad: { minimo: null, maximo: null },
+            estatus_code: 0,
+            mensaje_det: "Falta campo requerido: aseguradora_seleccionada",
+        };
+    }
+
+    const isNuevo = inferIsVehiculoNuevo(data);
+    const cp = s.insuranceCP ?? s.codigo_postal ?? "";
+    const estado = s.insuranceState ?? s.estado ?? "";
+
+    const collector = createApiJsonCollector(popup, { urlIncludes: "calculateMultiterm" });
+
+    try {
+        await tryFillSeguroUbicacion(popup, { isNuevo, cp, estado });
+
+        await waitUntilEnabled(popup, "#insuranceRecruitment", { timeout: 60000, pollMs: 300 });
+        await esperarYSeleccionar(popup, "#insuranceRecruitment", s.insuranceRecruitment);
+        await popup.waitForTimeout(3000);
+
+        await waitUntilEnabled(popup, "#insuranceType", { timeout: 60000, pollMs: 300 });
+        await esperarYSeleccionar(popup, "#insuranceType", s.insuranceType);
+        await popup.waitForTimeout(3000);
+
+        await waitUntilEnabled(popup, "#insurancePaymentTermRemnant", { timeout: 60000, pollMs: 300 });
+        await esperarYSeleccionar(popup, "#insurancePaymentTermRemnant", s.insurancePaymentTermRemnant);
+        await popup.waitForTimeout(3000);
+
+        await waitUntilEnabled(popup, "#insuranceCoverageLorant", { timeout: 60000, pollMs: 300 });
+        await esperarYSeleccionar(popup, "#insuranceCoverageLorant", normalizeUppercase(s.insuranceCoverageLorant));
+
+        await popup.mouse.click(10, 10).catch(() => { });
+        await esperarOverlayCarga(popup, { timeout: 5000 }).catch(() => { });
+
+        const opcionesSeguro = await esperarTablaSeguroLista(popup, 60000);
+        if (!Array.isArray(opcionesSeguro) || opcionesSeguro.length === 0) {
+            return {
+                aseguradora: aseguradoraElegida,
+                prima_seleccionada: null,
+                anualidad_requerida: false,
+                rango_anualidad: { minimo: null, maximo: null },
+                estatus_code: 0,
+                mensaje_det: "No se obtuvieron primas de seguro (tabla vacÃ­a).",
+            };
+        }
+
+        const sel = await seleccionarAseguradoraSeguro(popup, aseguradoraElegida, 120000);
+        if (!sel.ok) {
+            return {
+                aseguradora: aseguradoraElegida,
+                prima_seleccionada: null,
+                anualidad_requerida: false,
+                rango_anualidad: { minimo: null, maximo: null },
+                estatus_code: 0,
+                mensaje_det: `Aseguradora no esta disponible: ${aseguradoraElegida}`,
+            };
+        }
+
+        await popup.waitForTimeout(3000);
+
+        const plazoActual = normalizeString(await readSelectedValue(popup, "#creditDepositTerm")) || normalizeString(c.creditDepositTerm);
+
+        // Intenta leer calculateMultiterm (puede venir antes o despuÃ©s de seleccionar aseguradora).
+        await collector.waitForFirst(15000).catch(() => { });
+        const multitermJson = collector.getLatest()?.json ?? null;
+        const primasPorPlazo = extractPrimasPorPlazoFromMultiterm(multitermJson, aseguradoraElegida);
+
+        let primaSeleccionada = null;
+        if (plazoActual && primasPorPlazo && primasPorPlazo[String(Number(plazoActual))] !== undefined) {
+            primaSeleccionada = primasPorPlazo[String(Number(plazoActual))];
+        }
+
+        if (primaSeleccionada === null) {
+            const seleccionada = opcionesSeguro.find((x) => normalizeUppercase(x?.aseguradora) === aseguradoraElegida);
+            const monto = seleccionada ? parseMontoSeguro(seleccionada.monto) : 0;
+            if (monto > 0) primaSeleccionada = monto;
+        }
+
+        // Mensaje de anualidad: el portal suele pintarlo en el bloque con id "18n_customer_anualidad_maxmin".
+        // Se espera a que sea visible y se lee con innerText(); si no aparece, se intenta un fallback (best-effort).
+        const anualidadLocator = popup.locator("[id='18n_customer_anualidad_maxmin']").first();
+        const anualidadVisible = await anualidadLocator
+            .waitFor({ state: "visible", timeout: 15000 })
+            .then(() => true)
+            .catch(() => false);
+
+        const anualidadMsg = anualidadVisible
+            ? await anualidadLocator.innerText().catch(() => "")
+            : await readAnualidadMaxMinMessage(popup).catch(() => "");
+
+        const anualidadMessage = String(anualidadMsg || "").trim();
+        const range = anualidadMessage ? parseAnualidadRangeFromText(anualidadMessage) : null;
+
+        return {
+            aseguradora: aseguradoraElegida,
+            prima_seleccionada: typeof primaSeleccionada === "number" && Number.isFinite(primaSeleccionada) ? primaSeleccionada : null,
+            primas_por_plazo: primasPorPlazo && Object.keys(primasPorPlazo).length ? primasPorPlazo : null,
+            anualidad_requerida: Boolean(anualidadMessage),
+            rango_anualidad: {
+                minimo: range?.min ?? null,
+                maximo: range?.max ?? null,
+            },
+            estatus_code: typeof primaSeleccionada === "number" && Number.isFinite(primaSeleccionada) ? 1 : 0,
+            mensaje_det: typeof primaSeleccionada === "number" && Number.isFinite(primaSeleccionada) ? "EXITOSO" : "No se pudo determinar prima seleccionada",
+        };
+    } finally {
+        collector.dispose();
+    }
+}
+
 function parseMoneyNumber(value) {
     const raw = String(value ?? "").trim();
     if (!raw) return 0.0;
@@ -1110,9 +1542,14 @@ function parseMoneyFromText(value) {
 function parseAnualidadRangeFromText(text) {
     const raw = String(text || "");
     // Ej: "Su importe de anualidad debe estar entre $16,237 y $32,474"
-    const matches = raw.match(/\$?\s*[\d,.]+/g) || [];
+    // Se esperan 2 importes con formato moneda: $[\d,]+
+    const matches = raw.match(/\$[\d,]+/g) || [];
     const nums = matches
-        .map((m) => parseMoneyFromText(m))
+        .map((m) => {
+            const cleaned = String(m).replace(/[$\s]/g, "").replace(/,/g, "");
+            const n = Number.parseInt(cleaned, 10);
+            return Number.isFinite(n) ? n : null;
+        })
         .filter((n) => typeof n === "number" && Number.isFinite(n));
     if (nums.length < 2) return null;
     const min = Math.min(nums[0], nums[1]);
@@ -1142,6 +1579,7 @@ async function readAnualidadMaxMinMessage(page) {
             };
 
             const candidates = [];
+            candidates.push(document.querySelector("[id='18n_customer_anualidad_maxmin']"));
             candidates.push(document.querySelector('output[for="anualidadMaxMin"]'));
             candidates.push(document.querySelector('output[for*="anualidad"]'));
             candidates.push(document.querySelector('#anualidadMaxMin'));
@@ -2120,6 +2558,75 @@ function createBadGatewayWatcher(page, getStage) {
     return { promise, dispose };
 }
 
+function createApiJsonCollector(page, { urlIncludes, urlRegex } = {}) {
+    let disposed = false;
+    const hits = [];
+    let resolver = null;
+
+    const matches = (url) => {
+        const u = String(url || "");
+        if (urlRegex && urlRegex.test(u)) return true;
+        if (urlIncludes && u.toLowerCase().includes(String(urlIncludes).toLowerCase())) return true;
+        return false;
+    };
+
+    const onResponse = async (resp) => {
+        if (disposed) return;
+        try {
+            const url = resp.url();
+            if (!matches(url)) return;
+            const status = resp.status();
+            if (status < 200 || status >= 400) return;
+
+            const ct = String(resp.headers()?.["content-type"] || "");
+            if (!ct.toLowerCase().includes("application/json")) {
+                // Aun asÃ­ intentamos parsear, algunos backends mandan JSON con ct incorrecto.
+            }
+
+            const json = await resp.json().catch(() => null);
+            if (!json) return;
+
+            const entry = { url, status, at: Date.now(), json };
+            hits.push(entry);
+            if (resolver) {
+                const r = resolver;
+                resolver = null;
+                r(entry);
+            }
+        } catch { }
+    };
+
+    page.on("response", onResponse);
+
+    const waitForFirst = (timeoutMs = 45000) => {
+        if (hits.length) return Promise.resolve(hits[0]);
+        return new Promise((resolve, reject) => {
+            const t = setTimeout(() => {
+                if (resolver) resolver = null;
+                reject(new Error("Timeout esperando respuesta API"));
+            }, timeoutMs);
+            resolver = (entry) => {
+                clearTimeout(t);
+                resolve(entry);
+            };
+        });
+    };
+
+    const dispose = () => {
+        if (disposed) return;
+        disposed = true;
+        page.off("response", onResponse);
+        resolver = null;
+    };
+
+    return {
+        getAll: () => hits.slice(),
+        getLatest: () => (hits.length ? hits[hits.length - 1] : null),
+        waitForFirst,
+        dispose,
+    };
+}
+
 /* =========================
    FLUJO PRINCIPAL (PARAMETRIZABLE)
 ========================= */
@@ -2127,7 +2634,7 @@ async function runCetelemFlow(payload, hooks = {}) {
     const data = payload || DEFAULT_DATA;
 
     const nivelDetalleRaw = normalizeString(data?.nivel_detalle ?? data?.nivelDetalle).toLowerCase();
-    const allowedNivelDetalle = ["seguros", "guardar_cotizacion", "planes_disponibles"];
+    const allowedNivelDetalle = ["seguros", "seleccion_seguro", "guardar_cotizacion", "planes_disponibles"];
     if (!allowedNivelDetalle.includes(nivelDetalleRaw)) {
         throw new Error(`nivel_detalle no permitido: "${nivelDetalleRaw || "N/A"}"`);
     }
@@ -2167,6 +2674,7 @@ async function runCetelemFlow(payload, hooks = {}) {
     }
 
     const isSeguros = nivelDetalleRaw === "seguros";
+    const isSeleccionSeguro = nivelDetalleRaw === "seleccion_seguro";
     const isPlanesDisponibles = nivelDetalleRaw === "planes_disponibles";
     const isGuardarCotizacion = nivelDetalleRaw === "guardar_cotizacion";
 
@@ -2209,7 +2717,7 @@ async function runCetelemFlow(payload, hooks = {}) {
         badGatewayWatcher.dispose();
         badGatewayWatcher = createBadGatewayWatcher(popup, () => currentStage);
 
-        const skipCliente = isSeguros || isPlanesDisponibles;
+        const skipCliente = isSeguros || isSeleccionSeguro || isPlanesDisponibles;
 
         if (!skipCliente && isNonEmptyObject(data?.cliente)) {
             await stage("cliente", async () => etapaCliente(popup, data));
@@ -2240,8 +2748,11 @@ async function runCetelemFlow(payload, hooks = {}) {
         }
 
         let seguroResult = null;
-        if (!isPlanesDisponibles && (isSeguros || isNonEmptyObject(data?.seguro))) {
-            seguroResult = await stage("seguro", async () => etapaSeguro(popup, data));
+        if (!isPlanesDisponibles && (isSeguros || isSeleccionSeguro || isNonEmptyObject(data?.seguro))) {
+            seguroResult = await stage("seguro", async () => {
+                if (isSeleccionSeguro) return etapaSeleccionSeguro(popup, data);
+                return etapaSeguro(popup, data);
+            });
         }
 
         let guardarResult = null;

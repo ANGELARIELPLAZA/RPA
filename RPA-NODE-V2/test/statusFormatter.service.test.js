@@ -34,3 +34,38 @@ test("planes_disponibles: fallido mantiene estructura", () => {
     assert.deepEqual(out.planes, []);
     assert.equal(out.data, null);
 });
+
+test("seleccion_seguro: completado devuelve prima seleccionada", () => {
+    const out = formatearSalidaCliente({
+        status: "completado",
+        nivel_detalle: "seleccion_seguro",
+        result: {
+            aseguradora: "HDI",
+            prima_seleccionada: 52707.63,
+            anualidad_requerida: true,
+            rango_anualidad: { minimo: 17401, maximo: 34802 },
+            estatus_code: 1,
+            mensaje_det: "EXITOSO",
+        },
+    });
+
+    assert.equal(out.estatus_code, 1);
+    assert.equal(out.aseguradora, "HDI");
+    assert.equal(out.prima_seleccionada, 52707.63);
+    assert.equal(out.anualidad_requerida, true);
+    assert.deepEqual(out.rango_anualidad, { minimo: 17401, maximo: 34802 });
+});
+
+test("seleccion_seguro: fallido mantiene estructura con nulls", () => {
+    const out = formatearSalidaCliente({
+        status: "fallido",
+        nivel_detalle: "seleccion_seguro",
+        detalle: "Aseguradora no estÃ¡ disponible: GNP",
+    });
+
+    assert.equal(out.estatus_code, 0);
+    assert.equal(out.aseguradora, null);
+    assert.equal(out.prima_seleccionada, null);
+    assert.equal(out.anualidad_requerida, false);
+    assert.deepEqual(out.rango_anualidad, { minimo: null, maximo: null });
+});

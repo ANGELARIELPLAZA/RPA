@@ -48,7 +48,6 @@ services:
     volumes:
       - ./RPA-NODE-V2/screenshots:/app/screenshots
       - ./RPA-NODE-V2/logs:/app/logs
-      - ./RPA-NODE-V2/videos:/app/videos
     restart: unless-stopped
 
   loki:

@@ -29,3 +29,16 @@ test("buildFlowStages: no agrega cliente si viene vacío", () => {
     const stages = buildFlowStages(payload).map((s) => s.name);
     assert.deepEqual(stages, ["login", "vehiculo", "credito", "planes_disponibles", "finalizando"]);
 });
+
+test("buildFlowStages: seleccion_seguro salta cliente y agrega seguro", () => {
+    const payload = {
+        nivel_detalle: "seleccion_seguro",
+        cliente: { customerType: "1", customerName: "X" },
+        vehiculo: { vehicleBrand: "KIA" },
+        credito: { creditDepositTerm: "36" },
+        seguro: { insuranceCP: "64000", insuranceOption: "HDI" },
+    };
+
+    const stages = buildFlowStages(payload).map((s) => s.name);
+    assert.deepEqual(stages, ["login", "vehiculo", "credito", "seguro", "finalizando"]);
+});

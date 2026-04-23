@@ -20,11 +20,6 @@
 docker compose up --build -d
 ```
 
-MongoDB datasource (Enterprise / con licencia):
-```bash
-docker compose -f docker-compose.yml -f docker-compose.enterprise.yml up --build -d
-```
-
 Opcionales:
 ```bash
 docker compose --profile dev up --build -d
@@ -40,4 +35,4 @@ docker compose --profile analysis up --build -d
 
 ## Notas
 - `node-exporter` y `cAdvisor` asumen host Linux (montajes `/proc`, `/sys`, `/var/lib/docker`). En Docker Desktop (Windows/Mac) pueden requerir ajustes.
-- Si ves `Enterprise License Error` o `license.jwt not found`, estÃ¡s intentando usar el plugin `grafana-mongodb-datasource` sin licencia. Usa `docker-compose.enterprise.yml` y coloca `./observability/grafana/license.jwt`.
+- Si ves `Enterprise License Error` o `license.jwt not found`, estÃ¡s intentando usar el plugin `grafana-mongodb-datasource` sin licencia (no incluido en este repo).

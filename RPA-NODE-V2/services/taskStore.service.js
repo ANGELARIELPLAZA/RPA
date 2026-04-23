@@ -68,7 +68,7 @@ function toPublicStatus(task, { includePayload = false, includeScreenshotBase64 
     const fechaEjecucion = fechaMs ? formatDateTime(new Date(fechaMs)) : null;
 
     let screenshotBase64 = null;
-    if (includeScreenshotBase64 && task.status === "fallido" && task.screenshot_url) {
+    if (includeScreenshotBase64 && task.screenshot_url) {
         try {
             const match = String(task.screenshot_url).match(/\/screenshots\/([^?#]+)/i);
             const filename = match ? decodeURIComponent(match[1]) : null;
@@ -97,6 +97,9 @@ function toPublicStatus(task, { includePayload = false, includeScreenshotBase64 
         ...(fechaEjecucion ? { fecha_ejecucion: fechaEjecucion } : {}),
         ...(fechaMs ? { fecha_ejecucion_ms: fechaMs } : {}),
         tiempo_transcurrido: formatShortDuration(elapsedMs),
+        tiempo_transcurrido_ms: elapsedMs,
+        tiempo_transcurrido_segundos: Number((elapsedMs / 1000).toFixed(3)),
+        tiempo_transcurrido_minutos: Number((elapsedMs / 60000).toFixed(3)),
         result: primas_seguros ? null : task.result ?? null,
         ...(primas_seguros ? { primas_seguros } : {}),
         etapa_nombre: task.etapa_nombre,
@@ -117,7 +120,7 @@ function toPublicStatus(task, { includePayload = false, includeScreenshotBase64 
     };
 }
 
-function createTask({ task_id, fecha_ejecucion, payload_original, payload_normalizado, total_steps }) {
+function createTask({ task_id, fecha_ejecucion, payload_original, payload_normalizado, total_steps, endpoint, http_method }) {
     const task = {
         task_id,
         status: "En progreso",
@@ -130,6 +133,8 @@ function createTask({ task_id, fecha_ejecucion, payload_original, payload_normal
         finished_at: null,
         payload_original,
         payload_normalizado,
+        endpoint: endpoint || null,
+        http_method: http_method || null,
         result: null,
         error: null,
         detalle: null,

@@ -1,0 +1,265 @@
+{
+  "info": {
+    "_postman_id": "b0aa2f2d-7c51-4bfe-8d6b-7c6e4b8d5b21",
+    "name": "RPA_NODE_V2",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "description": "Postman collection for RPA-NODE-V2 endpoints (ASCII only)."
+  },
+  "item": [
+    {
+      "name": "Root",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "http://{{host}}:{{port}}/",
+          "protocol": "http",
+          "host": ["{{host}}"],
+          "port": "{{port}}",
+          "path": [""]
+        }
+      }
+    },
+    {
+      "name": "Health",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "http://{{host}}:{{port}}/health",
+          "protocol": "http",
+          "host": ["{{host}}"],
+          "port": "{{port}}",
+          "path": ["health"]
+        }
+      }
+    },
+    {
+      "name": "Tasks - List",
+      "request": {
+        "method": "GET",
+        "header": [
+          { "key": "x-api-key", "value": "{{api_key}}", "type": "text" }
+        ],
+        "url": {
+          "raw": "http://{{host}}:{{port}}/tasks?limit=50",
+          "protocol": "http",
+          "host": ["{{host}}"],
+          "port": "{{port}}",
+          "path": ["tasks"],
+          "query": [
+            { "key": "limit", "value": "50" }
+          ]
+        }
+      }
+    },
+    {
+      "name": "Status - Get",
+      "request": {
+        "method": "GET",
+        "header": [
+          { "key": "x-api-key", "value": "{{api_key}}", "type": "text" }
+        ],
+        "url": {
+          "raw": "http://{{host}}:{{port}}/status/{{task_id}}",
+          "protocol": "http",
+          "host": ["{{host}}"],
+          "port": "{{port}}",
+          "path": ["status", "{{task_id}}"]
+        }
+      }
+    },
+    {
+      "name": "Status - Debug (include_payload)",
+      "request": {
+        "method": "GET",
+        "header": [
+          { "key": "x-api-key", "value": "{{api_key}}", "type": "text" }
+        ],
+        "url": {
+          "raw": "http://{{host}}:{{port}}/status/{{task_id}}?formato=debug&include_payload=1",
+          "protocol": "http",
+          "host": ["{{host}}"],
+          "port": "{{port}}",
+          "path": ["status", "{{task_id}}"],
+          "query": [
+            { "key": "formato", "value": "debug" },
+            { "key": "include_payload", "value": "1" }
+          ]
+        }
+      }
+    },
+    {
+      "name": "Screenshots - Get file",
+      "request": {
+        "method": "GET",
+        "header": [
+          { "key": "x-api-key", "value": "{{api_key}}", "type": "text" }
+        ],
+        "url": {
+          "raw": "http://{{host}}:{{port}}/screenshots/{{screenshot_file}}",
+          "protocol": "http",
+          "host": ["{{host}}"],
+          "port": "{{port}}",
+          "path": ["screenshots", "{{screenshot_file}}"]
+        }
+      }
+    },
+    {
+      "name": "Cetelem - Cotizar async (seleccion_seguro - nuevo)",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "if (pm.response.code === 202) {",
+              "  const j = pm.response.json();",
+              "  if (j && j.task_id) pm.collectionVariables.set('task_id', j.task_id);",
+              "}"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json", "type": "text" },
+          { "key": "x-api-key", "value": "{{api_key}}", "type": "text" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"agencia\": \"Primavera\",\n  \"nivel_detalle\": \"seleccion_seguro\",\n  \"tipo_vehiculo\": \"N\",\n  \"uso_vehicular\": \"Personal\",\n  \"marca\": \"KIA\",\n  \"anio\": 2024,\n  \"modelo\": \"SPORTAGE\",\n  \"version\": \"EX\",\n  \"garantia_extendida\": 0,\n  \"seguro_gap\": \"N\",\n  \"plan_gap\": \"\",\n  \"tipo_pago_gap\": \"C\",\n  \"enganche_porcentaje\": 20,\n  \"plan_credito\": \"2504\",\n  \"plazo_credito\": \"36\",\n  \"contratacion_seguro\": \"01\",\n  \"tipo_seguro\": \"01\",\n  \"forma_pago\": \"01\",\n  \"paquete_seguro\": \"PLUS\",\n  \"aseguradora_seleccionada\": \"HDI\",\n  \"codigo_postal\": \"55764\"\n}\n"
+        },
+        "url": {
+          "raw": "http://{{host}}:{{port}}/cotizar-cetelem-async",
+          "protocol": "http",
+          "host": ["{{host}}"],
+          "port": "{{port}}",
+          "path": ["cotizar-cetelem-async"]
+        }
+      }
+    },
+    {
+      "name": "Cetelem - Cotizar async (seleccion_seguro - seminuevo)",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "if (pm.response.code === 202) {",
+              "  const j = pm.response.json();",
+              "  if (j && j.task_id) pm.collectionVariables.set('task_id', j.task_id);",
+              "}"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json", "type": "text" },
+          { "key": "x-api-key", "value": "{{api_key}}", "type": "text" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"agencia\": \"Primavera\",\n  \"nivel_detalle\": \"seleccion_seguro\",\n  \"tipo_vehiculo\": \"S\",\n  \"uso_vehicular\": \"Personal\",\n  \"marca\": \"NISSAN\",\n  \"anio\": 2022,\n  \"modelo\": \"VERSA\",\n  \"version\": \"ADVANCE\",\n  \"garantia_extendida\": 0,\n  \"seguro_gap\": \"N\",\n  \"plan_gap\": \"\",\n  \"tipo_pago_gap\": \"C\",\n  \"enganche_porcentaje\": 25,\n  \"plan_credito\": \"2504\",\n  \"plazo_credito\": \"48\",\n  \"contratacion_seguro\": \"01\",\n  \"tipo_seguro\": \"01\",\n  \"forma_pago\": \"01\",\n  \"paquete_seguro\": \"PLUS\",\n  \"aseguradora_seleccionada\": \"GNP\",\n  \"estado\": \"MEXICO\"\n}\n"
+        },
+        "url": {
+          "raw": "http://{{host}}:{{port}}/cotizar-cetelem-async",
+          "protocol": "http",
+          "host": ["{{host}}"],
+          "port": "{{port}}",
+          "path": ["cotizar-cetelem-async"]
+        }
+      }
+    },
+    {
+      "name": "Cetelem - Cotizar async (seguros - lista aseguradoras con prima)",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json", "type": "text" },
+          { "key": "x-api-key", "value": "{{api_key}}", "type": "text" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"agencia\": \"Primavera\",\n  \"nivel_detalle\": \"seguros\",\n  \"tipo_vehiculo\": \"N\",\n  \"uso_vehicular\": \"Personal\",\n  \"marca\": \"KIA\",\n  \"anio\": 2024,\n  \"modelo\": \"SPORTAGE\",\n  \"version\": \"EX\",\n  \"enganche_porcentaje\": 20,\n  \"plan_credito\": \"2504\",\n  \"plazo_credito\": \"36\",\n  \"contratacion_seguro\": \"01\",\n  \"tipo_seguro\": \"01\",\n  \"forma_pago\": \"01\",\n  \"paquete_seguro\": \"PLUS\",\n  \"codigo_postal\": \"55764\"\n}\n"
+        },
+        "url": {
+          "raw": "http://{{host}}:{{port}}/cotizar-cetelem-async",
+          "protocol": "http",
+          "host": ["{{host}}"],
+          "port": "{{port}}",
+          "path": ["cotizar-cetelem-async"]
+        }
+      }
+    },
+    {
+      "name": "Cetelem - Cotizar async (planes_disponibles)",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json", "type": "text" },
+          { "key": "x-api-key", "value": "{{api_key}}", "type": "text" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"agencia\": \"Primavera\",\n  \"nivel_detalle\": \"planes_disponibles\",\n  \"tipo_vehiculo\": \"N\",\n  \"uso_vehicular\": \"Personal\",\n  \"marca\": \"KIA\",\n  \"anio\": 2024,\n  \"modelo\": \"SPORTAGE\",\n  \"version\": \"EX\",\n  \"enganche_porcentaje\": 20\n}\n"
+        },
+        "url": {
+          "raw": "http://{{host}}:{{port}}/cotizar-cetelem-async",
+          "protocol": "http",
+          "host": ["{{host}}"],
+          "port": "{{port}}",
+          "path": ["cotizar-cetelem-async"]
+        }
+      }
+    },
+    {
+      "name": "Cetelem - Cotizar seguro (enqueue) (seleccion_seguro - nuevo)",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "if (pm.response.code === 202) {",
+              "  const j = pm.response.json();",
+              "  if (j && j.task_id) pm.collectionVariables.set('task_id', j.task_id);",
+              "}"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json", "type": "text" },
+          { "key": "x-api-key", "value": "{{api_key}}", "type": "text" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"agencia\": \"Primavera\",\n  \"nivel_detalle\": \"seleccion_seguro\",\n  \"tipo_vehiculo\": \"N\",\n  \"uso_vehicular\": \"Personal\",\n  \"marca\": \"KIA\",\n  \"anio\": 2024,\n  \"modelo\": \"SPORTAGE\",\n  \"version\": \"EX\",\n  \"garantia_extendida\": 0,\n  \"seguro_gap\": \"N\",\n  \"plan_gap\": \"\",\n  \"tipo_pago_gap\": \"C\",\n  \"enganche_porcentaje\": 20,\n  \"plan_credito\": \"2504\",\n  \"plazo_credito\": \"36\",\n  \"contratacion_seguro\": \"01\",\n  \"tipo_seguro\": \"01\",\n  \"forma_pago\": \"01\",\n  \"paquete_seguro\": \"PLUS\",\n  \"aseguradora_seleccionada\": \"HDI\",\n  \"codigo_postal\": \"55764\"\n}\n"
+        },
+        "url": {
+          "raw": "http://{{host}}:{{port}}/cotizar-seguro-cetelem",
+          "protocol": "http",
+          "host": ["{{host}}"],
+          "port": "{{port}}",
+          "path": ["cotizar-seguro-cetelem"]
+        }
+      }
+    }
+  ],
+  "event": [],
+  "variable": [
+    { "key": "host", "value": "localhost" },
+    { "key": "port", "value": "3000" },
+    { "key": "base_url", "value": "http://{{host}}:{{port}}" },
+    { "key": "api_key", "value": "" },
+    { "key": "task_id", "value": "" },
+    { "key": "screenshot_file", "value": "" }
+  ]
+}

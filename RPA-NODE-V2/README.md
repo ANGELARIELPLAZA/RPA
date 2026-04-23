@@ -1,5 +1,9 @@
 # RPA-NODE-V2 (API)
 
+## Deploy a AWS App Runner
+
+Guía para desplegar **solo este servicio** en App Runner (usando imagen en ECR): `DEPLOY_APPRUNNER.md`.
+
 ## Endpoints
 
 - `POST /cotizar-cetelem-async` (asincrono)
