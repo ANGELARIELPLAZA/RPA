@@ -390,6 +390,75 @@ function resolveSelectOption(selectSnapshot, selector, desiredRaw) {
     return null;
 }
 
+function getMeaningfulSelectOptionsGeneric(optionsRaw) {
+    const options = Array.isArray(optionsRaw) ? optionsRaw : [];
+    return options.filter((o) => {
+        const value = normalizeString(o?.value);
+        const label = normalizeCompareText(o?.label);
+        if (value === "" || value === "-1" || value === "0") {
+            if (label.includes("seleccione") || label.includes("seleccion")) return false;
+        }
+        return true;
+    });
+}
+
+async function waitForMeaningfulSelectOptions(page, locator, selector, timeout) {
+    const hooks = page?.__rpaHooks;
+    const start = Date.now();
+    let triedKick = false;
+    let lastSnap = null;
+
+    while (Date.now() - start < timeout) {
+        const snap = await snapshotSelect(locator);
+        lastSnap = snap;
+        const meaningful =
+            selector === "#gapInsurancePlan"
+                ? getMeaningfulSelectOptions(selector, snap.options)
+                : getMeaningfulSelectOptionsGeneric(snap.options);
+
+        if (meaningful.length > 0) return snap;
+
+        // A veces el portal no dispara el ajax hasta que se hace foco/click en el select.
+        if (!triedKick && Date.now() - start > 1500) {
+            triedKick = true;
+            if (hooks?.onProgress) {
+                await hooks.onProgress({ page, message: `Opciones vacÃ­as en ${selector}; forzando foco/click para disparar carga...` }).catch(() => { });
+            }
+            await locator.scrollIntoViewIfNeeded().catch(() => { });
+            await locator.click({ timeout: 1500 }).catch(() => { });
+            await page.mouse.click(10, 10).catch(() => { });
+            await esperarOverlayCarga(page, { timeout: 5000 }).catch(() => { });
+        }
+
+        await page.waitForTimeout(250);
+    }
+
+    if (hooks?.onErrorScreenshot) {
+        await hooks.onErrorScreenshot({ page }).catch(() => { });
+    }
+
+    const formSnap = await readFormErrorSnapshot(page).catch(() => ({ content: "", field: "" }));
+    const formMessage = normalizeString(formSnap?.content);
+
+    const optionsList = lastSnap
+        ? formatOptionsList(lastSnap, { limit: 80 })
+        : "(sin snapshot)";
+
+    const lines = [
+        `Sin opciones cargadas en ${selector} dentro de ${timeout}ms.`,
+        lastSnap ? `Estado actual: value="${normalizeString(lastSnap.value)}" label="${normalizeString(lastSnap.selectedLabel)}" opciones=${lastSnap.optionsCount}` : "",
+        "",
+        "Opciones visibles en el select:",
+        optionsList || "(sin opciones)",
+    ].filter(Boolean);
+
+    if (formMessage) {
+        lines.push("", "Mensaje del formulario:", formMessage);
+    }
+
+    throw new Error(lines.join("\n"));
+}
+
 async function esperarYSeleccionar(page, selector, value, timeout = 30000, options = {}) {
     const desired = normalizeString(value);
     const hooks = page?.__rpaHooks;
@@ -409,34 +478,8 @@ async function esperarYSeleccionar(page, selector, value, timeout = 30000, optio
         await hooks.onProgress({ page, message: `Esperando ${selector} (deseado=${desired})` }).catch(() => { });
     }
 
-    // Espera a que el select tenga opciones cargadas (sin esperar el "deseado" indefinidamente)
-    await page.waitForFunction(
-        (sel) => {
-            const nodes = Array.from(document.querySelectorAll(sel));
-            const select = nodes.find((n) => n && n.tagName === "SELECT" && !n.disabled);
-            if (!select) return false;
-            const opts = Array.from(select.options || []).map((o) => ({
-                value: String(o?.value ?? "").trim(),
-                label: String(o?.label ?? o?.textContent ?? "").trim(),
-            }));
-
-            // Considera "cargado" si existe al menos 1 opciÃ³n "real" (no placeholder).
-            const meaningful = opts.filter((o) => {
-                const value = String(o.value || "").trim();
-                const label = String(o.label || "").trim().toLowerCase();
-                if (value === "" || value === "-1" || value === "0") {
-                    if (label.includes("seleccione") || label.includes("seleccion")) return false;
-                }
-                return true;
-            });
-
-            return meaningful.length > 0;
-        },
-        selector,
-        { timeout }
-    );
-
-    let snap = await snapshotSelect(locator);
+    // Espera a que el select (este locator) tenga opciones cargadas.
+    let snap = await waitForMeaningfulSelectOptions(page, locator, selector, timeout);
     const meaningfulOptions = getMeaningfulSelectOptions(selector, snap.options);
     let match = resolveSelectOption(snap, selector, desired);
 
@@ -577,10 +620,11 @@ async function esperarYSeleccionar(page, selector, value, timeout = 30000, optio
 async function reintentarSelectDependiente(page, { dependeDe, objetivo, timeout = 60000, reintentos = 2 } = {}) {
     const hooks = page?.__rpaHooks;
     const dependencias = Array.isArray(dependeDe) ? dependeDe : [dependeDe].filter(Boolean);
+    const attemptTimeout = Math.min(timeout, 12000);
 
     for (let attempt = 1; attempt <= Math.max(1, reintentos + 1); attempt += 1) {
         try {
-            await esperarYSeleccionar(page, objetivo.selector, objetivo.value, timeout);
+            await esperarYSeleccionar(page, objetivo.selector, objetivo.value, attemptTimeout);
             return;
         } catch (error) {
             if (attempt > reintentos) throw error;
@@ -595,7 +639,7 @@ async function reintentarSelectDependiente(page, { dependeDe, objetivo, timeout 
             // Re-disparar el onchange del/los campo(s) anterior(es) (aunque ya estÃ©n seleccionados) para forzar recarga de opciones.
             for (const dep of dependencias) {
                 if (!dep?.selector) continue;
-                await esperarYSeleccionar(page, dep.selector, dep.value, timeout, { force: true }).catch(() => { });
+                await esperarYSeleccionar(page, dep.selector, dep.value, attemptTimeout, { force: true }).catch(() => { });
                 await page.waitForTimeout(400);
             }
             await page.mouse.click(10, 10).catch(() => { });

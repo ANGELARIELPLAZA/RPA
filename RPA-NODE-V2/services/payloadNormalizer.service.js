@@ -287,6 +287,11 @@ function normalizeSeguro(value) {
         seguro.insurancePaymentTermRemnant = seguro.forma_pago;
     }
 
+    // Alias visto en algunos payloads: insuranceTermRemnant -> insurancePaymentTermRemnant
+    if (seguro.insurancePaymentTermRemnant === undefined && seguro.insuranceTermRemnant !== undefined) {
+        seguro.insurancePaymentTermRemnant = seguro.insuranceTermRemnant;
+    }
+
     if (seguro.insuranceCoverageLorant === undefined && seguro.paquete_seguro !== undefined) {
         seguro.insuranceCoverageLorant = seguro.paquete_seguro;
     }
@@ -500,6 +505,7 @@ function normalizeFormatoB(body) {
         "tipo_seguro",
         "insuranceType",
         "forma_pago",
+        "insuranceTermRemnant",
         "insurancePaymentTermRemnant",
         "paquete_seguro",
         "insuranceCoverageLorant",
