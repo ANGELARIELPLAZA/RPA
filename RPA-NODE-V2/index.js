@@ -223,6 +223,39 @@ async function getBestSelectLocator(page, selector) {
     return page.locator(selector).first();
 }
 
+async function resolveFirstExistingSelector(page, selectors, { timeout = 8000 } = {}) {
+    const list = Array.isArray(selectors) ? selectors : [selectors].filter(Boolean);
+    const started = Date.now();
+
+    while (Date.now() - started < timeout) {
+        for (const selector of list) {
+            if (!selector) continue;
+            const loc = page.locator(selector).first();
+            const count = await loc.count().catch(() => 0);
+            if (count <= 0) continue;
+
+            const visible = await loc.isVisible().catch(() => false);
+            if (!visible) continue;
+
+            const disabled = await loc.isDisabled().catch(() => false);
+            if (disabled) continue;
+
+            return selector;
+        }
+
+        await page.waitForTimeout(250);
+    }
+
+    // Fallback: devolver el primero que exista aunque estÃ© oculto/disabled, para un error mÃ¡s explicativo despuÃ©s.
+    for (const selector of list) {
+        if (!selector) continue;
+        const count = await page.locator(selector).count().catch(() => 0);
+        if (count > 0) return selector;
+    }
+
+    throw new Error(`No encontrÃ© ninguno de los selectores: ${list.join(", ")}`);
+}
+
 async function snapshotSelect(locator) {
     return locator.evaluate((el) => {
         const select = el;
@@ -1297,13 +1330,24 @@ async function etapaSeguro(popup, data) {
     await esperarYSeleccionar(popup, "#insuranceType", s.insuranceType);
     await popup.waitForTimeout(3000);
 
-    await waitUntilEnabled(popup, "#insurancePaymentTermRemnant", { timeout: 60000, pollMs: 300 });
+    const paymentTermSelector = await resolveFirstExistingSelector(
+        popup,
+        [
+            "#insurancePaymentTermRemnant",
+            "#insuranceTermRemnant",
+            "select[name='insurancePaymentTermRemnant']",
+            "select[name='insuranceTermRemnant']",
+        ],
+        { timeout: 15000 }
+    );
+
+    await waitUntilEnabled(popup, paymentTermSelector, { timeout: 60000, pollMs: 300 });
     await reintentarSelectDependiente(popup, {
         dependeDe: [
             { selector: "#insuranceType", value: s.insuranceType },
             { selector: "#insuranceRecruitment", value: s.insuranceRecruitment },
         ],
-        objetivo: { selector: "#insurancePaymentTermRemnant", value: s.insurancePaymentTermRemnant },
+        objetivo: { selector: paymentTermSelector, value: s.insurancePaymentTermRemnant },
         timeout: 60000,
         reintentos: 2,
     });
