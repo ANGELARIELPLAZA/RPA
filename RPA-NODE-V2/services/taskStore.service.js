@@ -43,6 +43,24 @@ function parseMoney(value) {
     return Number.isFinite(num) ? num : null;
 }
 
+function normalizeRangoAnualidad(value) {
+    const raw = value && typeof value === "object" ? value : null;
+    const minimoRaw = raw ? (raw.minimo ?? raw.min) : null;
+    const maximoRaw = raw ? (raw.maximo ?? raw.max) : null;
+
+    const toFiniteNumberOrNull = (v) => {
+        if (v === undefined || v === null) return null;
+        const normalized = typeof v === "string" ? v.trim() : v;
+        if (normalized === "") return null;
+        const n = Number(normalized);
+        return Number.isFinite(n) ? n : null;
+    };
+
+    const minimo = toFiniteNumberOrNull(minimoRaw);
+    const maximo = toFiniteNumberOrNull(maximoRaw);
+    return { minimo, maximo };
+}
+
 function mapPrimasSegurosFromResult(result) {
     if (!Array.isArray(result)) return null;
     return result
@@ -50,8 +68,8 @@ function mapPrimasSegurosFromResult(result) {
         .map((x) => ({
             aseguradora: String(x.aseguradora ?? "").trim(),
             monto: parseMoney(x.monto),
-            anualidad_requerida: true,
-            rango_anualidad: { minimo: null, maximo: null },
+            anualidad_requerida: x?.anualidad_requerida === true,
+            rango_anualidad: normalizeRangoAnualidad(x?.rango_anualidad),
         }))
         // Solo devolver primas > 0.
         .filter((x) => x.aseguradora && x.monto !== null && x.monto !== 0);

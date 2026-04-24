@@ -1372,8 +1372,36 @@ async function etapaSeguro(popup, data) {
     }
 
     if (soloListaAseguradoras || empty(s.insuranceOption)) {
-        // En modo "seguros" devolvemos solo aquellas con prima > 0.
-        return opcionesSeguro.filter((x) => parseMontoSeguro(x?.monto) > 0);
+        // En modo "seguros" devolvemos solo aquellas con prima > 0 y (best-effort) el rango de anualidad.
+        const opcionesValidas = opcionesSeguro.filter((x) => parseMontoSeguro(x?.monto) > 0);
+        const enriched = [];
+
+        for (const opt of opcionesValidas) {
+            const aseguradora = opt?.aseguradora;
+            let anualidadMessage = "";
+            let range = null;
+
+            try {
+                await esperarYSeleccionarAseguradora(popup, aseguradora, 30000);
+                const info = await readAnualidadRangeInfo(popup).catch(() => null);
+                anualidadMessage = info?.anualidadMessage || "";
+                range = info?.range || null;
+            } catch {
+                anualidadMessage = "";
+                range = null;
+            }
+
+            enriched.push({
+                ...opt,
+                anualidad_requerida: Boolean(String(anualidadMessage || "").trim()),
+                rango_anualidad: {
+                    minimo: range?.min ?? null,
+                    maximo: range?.max ?? null,
+                },
+            });
+        }
+
+        return enriched;
     }
 
     await esperarYSeleccionarAseguradora(popup, s.insuranceOption, 120000);
@@ -1712,6 +1740,23 @@ function parseAnualidadRangeFromText(text) {
     const max = Math.max(nums[0], nums[1]);
     if (!Number.isFinite(min) || !Number.isFinite(max)) return null;
     return { min, max };
+}
+
+async function readAnualidadRangeInfo(page) {
+    const anualidadLocator = page.locator("[id='18n_customer_anualidad_maxmin']").first();
+    const anualidadVisible = await anualidadLocator
+        .waitFor({ state: "visible", timeout: 3000 })
+        .then(() => true)
+        .catch(() => false);
+
+    const anualidadMsg = anualidadVisible
+        ? await anualidadLocator.innerText().catch(() => "")
+        : await readAnualidadMaxMinMessage(page).catch(() => "");
+
+    const anualidadMessage = String(anualidadMsg || "").trim();
+    const range = anualidadMessage ? parseAnualidadRangeFromText(anualidadMessage) : null;
+
+    return { anualidadMessage, range };
 }
 
 async function readAnualidadMaxMinMessage(page) {

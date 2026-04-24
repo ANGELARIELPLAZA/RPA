@@ -26,6 +26,26 @@ function formatPrima(value) {
     return num.toFixed(2);
 }
 
+function normalizeRangoAnualidad(value) {
+    const raw = value && typeof value === "object" ? value : null;
+
+    const minimoRaw = raw ? (raw.minimo ?? raw.min) : null;
+    const maximoRaw = raw ? (raw.maximo ?? raw.max) : null;
+
+    const toFiniteNumberOrNull = (v) => {
+        if (v === undefined || v === null) return null;
+        const normalized = typeof v === "string" ? v.trim() : v;
+        if (normalized === "") return null;
+        const n = Number(normalized);
+        return Number.isFinite(n) ? n : null;
+    };
+
+    const minimo = toFiniteNumberOrNull(minimoRaw);
+    const maximo = toFiniteNumberOrNull(maximoRaw);
+
+    return { minimo, maximo };
+}
+
 function formatearSalidaCliente(data) {
     const status = String(data?.status ?? "").toLowerCase();
     const nivel_detalle = normalizeNivelDetalle(data?.nivel_detalle ?? data?.nivelDetalle);
@@ -75,15 +95,13 @@ function formatearSalidaCliente(data) {
                 ? prima
                 : (Number.isFinite(Number(prima)) ? Number(prima) : null);
 
-        const rangoRaw = result?.rango_anualidad && typeof result.rango_anualidad === "object" ? result.rango_anualidad : null;
-        const minimo = rangoRaw && Number.isFinite(Number(rangoRaw.minimo)) ? Number(rangoRaw.minimo) : null;
-        const maximo = rangoRaw && Number.isFinite(Number(rangoRaw.maximo)) ? Number(rangoRaw.maximo) : null;
+        const rango_anualidad = normalizeRangoAnualidad(result?.rango_anualidad);
 
         const base = {
             aseguradora,
             prima_seleccionada,
             anualidad_requerida: result?.anualidad_requerida === true,
-            rango_anualidad: { minimo, maximo },
+            rango_anualidad,
         };
 
         if (status === "completado") {
@@ -191,7 +209,7 @@ function formatearSalidaCliente(data) {
             aseguradora: String(p?.aseguradora ?? p?.nombre ?? "").trim(),
             monto: formatPrima(p?.monto ?? p?.prima),
             anualidad_requerida: p?.anualidad_requerida === true,
-            rango_anualidad: p?.rango_anualidad || { minimo: null, maximo: null },
+            rango_anualidad: normalizeRangoAnualidad(p?.rango_anualidad),
         }));
 
         if (primas_formateadas.length === 0) {

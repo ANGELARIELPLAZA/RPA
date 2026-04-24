@@ -69,3 +69,30 @@ test("seleccion_seguro: fallido mantiene estructura con nulls", () => {
     assert.equal(out.anualidad_requerida, false);
     assert.deepEqual(out.rango_anualidad, { minimo: null, maximo: null });
 });
+
+test("seguros: completado incluye rango_anualidad por aseguradora", () => {
+    const out = formatearSalidaCliente({
+        status: "completado",
+        nivel_detalle: "seguros",
+        primas_seguros: [
+            {
+                aseguradora: "HDI",
+                monto: "1000",
+                anualidad_requerida: true,
+                rango_anualidad: { minimo: 100, maximo: 200 },
+            },
+            {
+                aseguradora: "GNP",
+                monto: 2000,
+                anualidad_requerida: false,
+                rango_anualidad: { min: "10", max: "20" },
+            },
+        ],
+    });
+
+    assert.equal(out.estatus_code, 1);
+    assert.equal(out.nivel_detalle, "seguros");
+    assert.equal(out.primas_seguros.length, 2);
+    assert.deepEqual(out.primas_seguros[0].rango_anualidad, { minimo: 100, maximo: 200 });
+    assert.deepEqual(out.primas_seguros[1].rango_anualidad, { minimo: 10, maximo: 20 });
+});
