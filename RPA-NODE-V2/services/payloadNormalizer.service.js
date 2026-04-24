@@ -410,6 +410,7 @@ function normalizeFormatoA(body) {
         vehiculo: normalizeVehiculo(body.vehiculo),
         credito: normalizeCredito(body.credito),
         seguro: normalizeSeguro(body.seguro),
+        ...(isObject(body.debug) ? { debug: body.debug } : {}),
     };
 }
 
@@ -523,6 +524,7 @@ function normalizeFormatoB(body) {
         vehiculo: normalizeVehiculo(pick(body, vehiculoKeys)),
         credito: normalizeCredito(pick(body, creditoKeys)),
         seguro: normalizeSeguro(pick(body, seguroKeys)),
+        ...(isObject(body.debug) ? { debug: body.debug } : {}),
     };
 }
 

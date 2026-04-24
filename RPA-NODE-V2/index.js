@@ -1314,6 +1314,12 @@ async function etapaPlanesDisponibles(popup) {
 ========================= */
 async function etapaSeguro(popup, data) {
     const s = data?.seguro || {};
+    const debug = data?.debug && typeof data.debug === "object" ? data.debug : null;
+    const debugStopAt = String(debug?.stop_at ?? debug?.stopAt ?? process.env.DEBUG_STOP_AT ?? "").trim().toLowerCase();
+    const debugPauseMs = Number(debug?.pause_ms ?? debug?.pauseMs ?? process.env.DEBUG_PAUSE_MS ?? 0) || 0;
+    const debugAseguradora = normalizeUppercase(debug?.aseguradora ?? debug?.insuranceOption ?? "");
+    const debugStopEnabled = debugStopAt === "seguros" || debugStopAt === "seguro";
+    let debugStopFired = false;
     const nivelDetalle = normalizeString(data?.nivel_detalle ?? data?.nivelDetalle).toLowerCase();
     const soloListaAseguradoras = nivelDetalle === "seguros";
 
@@ -1399,6 +1405,38 @@ async function etapaSeguro(popup, data) {
                     maximo: range?.max ?? null,
                 },
             });
+
+            if (
+                debugStopEnabled &&
+                !debugStopFired &&
+                (!debugAseguradora || normalizeUppercase(aseguradora) === debugAseguradora)
+            ) {
+                debugStopFired = true;
+                const hooks = popup?.__rpaHooks;
+
+                const msgParts = [
+                    "DEBUG_STOP (seguros): detenido para inspecciÃ³n",
+                    `aseguradora=${normalizeUppercase(aseguradora) || "(desconocida)"}`,
+                    anualidadMessage ? `anualidad_msg="${String(anualidadMessage).replace(/\s+/g, " ").trim()}"` : "",
+                    range ? `rango=[${range.min}, ${range.max}]` : "",
+                ].filter(Boolean);
+
+                if (hooks?.onProgress) {
+                    await hooks.onProgress({ page: popup, message: msgParts.join(" | ") }).catch(() => { });
+                }
+
+                if (hooks?.onErrorScreenshot) {
+                    await hooks.onErrorScreenshot({ page: popup }).catch(() => { });
+                }
+
+                if (debugPauseMs > 0) {
+                    await popup.waitForTimeout(debugPauseMs).catch(() => { });
+                }
+
+                const err = new Error(msgParts.join(" | "));
+                err.code = "DEBUG_STOP";
+                throw err;
+            }
         }
 
         return enriched;

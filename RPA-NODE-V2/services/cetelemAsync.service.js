@@ -540,8 +540,15 @@ async function executeTask(taskId, normalizedPayload, portalMeta) {
                 (phaseDurations[currentPhaseName] || 0) + Math.max(0, doneAt - currentPhaseStartedAt);
             taskStore.patchTask(taskId, { phase_durations: { ...phaseDurations } });
         }
-        setRobotError(error);
-        logger.error(`[task ${String(taskId).slice(0, 8)}] error: ${error?.message || error}`);
+
+        const isDebugStop = String(error?.code || "").toUpperCase() === "DEBUG_STOP";
+        if (!isDebugStop) {
+            setRobotError(error);
+            logger.error(`[task ${String(taskId).slice(0, 8)}] error: ${error?.message || error}`);
+        } else {
+            setRobotError(null);
+            logger.warn(`[task ${String(taskId).slice(0, 8)}] debug stop: ${error?.message || error}`);
+        }
 
         // Si el robot ya tiene page, siempre intentar evidencia.
         const taskBeforeFail = taskStore.getTask(taskId);
@@ -550,11 +557,12 @@ async function executeTask(taskId, normalizedPayload, portalMeta) {
         }
 
         // intentar screenshot si el flow expone page en error (hooks), si no, solo marcar fallo
-        const errorDetalle = buildTaskDetalle(error);
+        const errorDetalle = isDebugStop ? String(error?.message || "Debug stop") : buildTaskDetalle(error);
         const formError = taskStore.getTask(taskId)?.form_error_content;
         const formErrorLine = formError ? `\nFormError: ${formError}` : "";
         const lastProgress = taskStore.getTask(taskId)?.detalle;
-        const detalle = lastProgress ? `${lastProgress}\nError: ${errorDetalle}${formErrorLine}` : `${errorDetalle}${formErrorLine}`;
+        const prefix = isDebugStop ? "DebugStop" : "Error";
+        const detalle = lastProgress ? `${lastProgress}\n${prefix}: ${errorDetalle}${formErrorLine}` : `${errorDetalle}${formErrorLine}`;
         taskStore.failTask(taskId, {
             detalle,
             error: {
@@ -576,11 +584,11 @@ async function executeTask(taskId, normalizedPayload, portalMeta) {
         });
         trackingClient.createEvent({
             task_id: taskId,
-            event_type: "error",
+            event_type: isDebugStop ? "debug_stop" : "error",
             etapa_nombre: etapaNombre,
             etapa_numero: `${currentStep}/${totalSteps}`,
             message: detalle,
-            level: "error",
+            level: isDebugStop ? "warn" : "error",
             timestamp: new Date().toISOString(),
             meta: { code: error?.code },
         });
